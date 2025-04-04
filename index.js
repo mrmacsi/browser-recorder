@@ -27,8 +27,22 @@ if (process.env.NODE_ENV !== 'production') {
 // Parse JSON request bodies
 app.use(express.json());
 
-// Serve static files from the uploads directory
-app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
+// Serve static files from the uploads directory with explicit MIME types
+app.use('/uploads', (req, res, next) => {
+  // Set the correct MIME type for webm files
+  if (req.path.endsWith('.webm')) {
+    res.set('Content-Type', 'video/webm');
+  }
+  next();
+}, express.static(path.join(__dirname, 'uploads'), {
+  // Set Cache-Control headers
+  setHeaders: (res, filePath) => {
+    if (path.extname(filePath) === '.webm') {
+      // No caching for videos for development purposes
+      res.setHeader('Cache-Control', 'no-cache');
+    }
+  }
+}));
 
 // API endpoint for recording a website
 app.post('/api/record', async (req, res) => {
@@ -39,10 +53,31 @@ app.post('/api/record', async (req, res) => {
     console.log(`Recording request received for ${url} (${duration}s)`);
     const filename = await recordWebsite(url, duration);
     
+    // Check if the file exists
+    const filePath = path.join(uploadsDir, filename);
+    if (!fs.existsSync(filePath)) {
+      console.error(`Warning: Generated file ${filePath} does not exist`);
+    } else {
+      console.log(`File exists and is ready to be served: ${filePath}`);
+      // Get file size for logging
+      const stats = fs.statSync(filePath);
+      console.log(`File size: ${stats.size} bytes`);
+    }
+    
+    // Get the host from request
+    const host = req.get('host');
+    const protocol = req.protocol;
+    
+    // Build the absolute URL
+    let fileUrl = `/uploads/${filename}`;
+    let absoluteUrl = `${protocol}://${host}/uploads/${filename}`;
+    
     // Return the recording details
     res.json({
       filename,
-      url: `/uploads/${filename}`
+      url: fileUrl,
+      absoluteUrl: absoluteUrl,
+      fileSize: fs.existsSync(filePath) ? fs.statSync(filePath).size : null
     });
   } catch (error) {
     console.error('Error during recording:', error);

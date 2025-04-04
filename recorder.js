@@ -107,11 +107,40 @@ async function recordWebsite(url, duration = 10) {
     const videoPath = await context.close();
     
     // Get the actual filename from the videoPath (fix for filename mismatch issue)
-    const actualFilename = path.basename(videoPath);
+    const originalFilename = path.basename(videoPath);
+    const newFilename = `recording-${uuidv4()}.webm`;
     const actualDuration = (Date.now() - startTime) / 1000;
     
-    console.log(`Recording completed: ${actualFilename} (duration: ${actualDuration.toFixed(1)}s)`);
-    return actualFilename;
+    // Copy the file with our new filename to ensure consistency
+    const sourcePath = path.join(uploadsDir, originalFilename);
+    const destinationPath = path.join(uploadsDir, newFilename);
+    
+    try {
+      // Check if the original file exists
+      if (fs.existsSync(sourcePath)) {
+        // Copy the file with our new filename
+        fs.copyFileSync(sourcePath, destinationPath);
+        console.log(`Copied recording from ${originalFilename} to ${newFilename}`);
+        
+        // Remove the original file to avoid accumulating duplicate recordings
+        fs.unlinkSync(sourcePath);
+        console.log(`Removed original recording file ${originalFilename}`);
+      } else {
+        console.error(`Original file not found at: ${sourcePath}`);
+        // If the original file doesn't exist, check if the destination file already exists
+        if (!fs.existsSync(destinationPath)) {
+          throw new Error('Recording file not found');
+        }
+      }
+    } catch (fsError) {
+      console.error('Error handling recording file:', fsError);
+      // If there's an error with the file operation, still return the original filename as fallback
+      console.log(`Falling back to original filename: ${originalFilename}`);
+      return originalFilename;
+    }
+    
+    console.log(`Recording completed: ${newFilename} (duration: ${actualDuration.toFixed(1)}s)`);
+    return newFilename;
   } catch (error) {
     console.error('Recording error:', error);
     throw error;
