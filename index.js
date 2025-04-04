@@ -54,6 +54,13 @@ app.post('/api/record', async (req, res) => {
   
   try {
     console.log(`Recording request received for ${url} (${duration}s)`);
+    
+    // Ensure uploads directory exists before proceeding
+    if (!fs.existsSync(uploadsDir)) {
+      console.log(`Creating uploads directory: ${uploadsDir}`);
+      fs.mkdirSync(uploadsDir, { recursive: true });
+    }
+    
     const filename = await recordWebsite(url, duration);
     
     // Check if the file exists
