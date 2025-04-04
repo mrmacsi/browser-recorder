@@ -127,7 +127,7 @@ function findPlaywrightRecording(directory) {
     
     // Find the most recent .webm file
     const webmFiles = files
-      .filter(file => file.endsWith('.webm') && !file.startsWith('recording-'))
+      .filter(file => file.endsWith('.webm'))
       .map(file => {
         const fullPath = path.join(directory, file);
         const stats = fs.statSync(fullPath);
@@ -142,7 +142,7 @@ function findPlaywrightRecording(directory) {
     
     if (webmFiles.length > 0) {
       console.log(`Found ${webmFiles.length} webm files, using most recent: ${webmFiles[0].filename}`);
-      return webmFiles[0].path;
+      return webmFiles[0];
     }
     
     console.log('No webm files found in uploads directory');
@@ -170,9 +170,9 @@ async function recordWebsite(url, duration = 10) {
   // Ensure browsers are installed before proceeding
   await ensureBrowsersInstalled();
   
-  // Generate a unique filename for this recording
-  const newFilename = `recording-${uuidv4()}.webm`;
-  const destinationPath = path.join(uploadsDir, newFilename);
+  // Fallback filename in case we need to create one
+  const fallbackFilename = `fallback-${uuidv4()}.webm`;
+  const fallbackPath = path.join(uploadsDir, fallbackFilename);
   
   // Launch browser with appropriate configuration
   let browser;
@@ -200,19 +200,6 @@ async function recordWebsite(url, duration = 10) {
   }
 
   try {
-    // Clear any existing webm files in the uploads directory to avoid confusion
-    const existingFiles = fs.readdirSync(uploadsDir);
-    for (const file of existingFiles) {
-      if (file.endsWith('.webm') && !file.startsWith('recording-')) {
-        try {
-          fs.unlinkSync(path.join(uploadsDir, file));
-          console.log(`Removed existing webm file: ${file}`);
-        } catch (e) {
-          console.error(`Failed to remove existing webm file: ${file}`, e);
-        }
-      }
-    }
-    
     // Create a browser context with video recording enabled
     const context = await browser.newContext({
       viewport: { width: 1280, height: 720 },
@@ -254,113 +241,30 @@ async function recordWebsite(url, duration = 10) {
     const videoPath = await context.close();
     console.log(`Context closed, video path: ${videoPath || 'undefined'}`);
     
-    // Look for an actual video file in the uploads directory
-    const foundVideoPath = findPlaywrightRecording(uploadsDir);
+    // Look for the most recently created video file in the uploads directory
+    const foundVideoFile = findPlaywrightRecording(uploadsDir);
     
-    // Handle the case where videoPath is undefined
-    if (!videoPath && !foundVideoPath) {
+    // Handle the case where no video was found
+    if (!foundVideoFile) {
       console.warn("No video was produced by Playwright");
-      console.log(`Creating a fallback recording file: ${newFilename}`);
+      console.log(`Creating a fallback file: ${fallbackFilename}`);
       
       // Try to create a fallback video
-      const success = await createFallbackVideo(destinationPath, url, duration);
+      const success = await createFallbackVideo(fallbackPath, url, duration);
       
       if (!success) {
         // Create an empty placeholder file if ffmpeg fails
-        fs.writeFileSync(destinationPath, "VIDEO_RECORDING_FAILED");
-        console.log(`Created placeholder file at ${destinationPath}`);
+        fs.writeFileSync(fallbackPath, "VIDEO_RECORDING_FAILED");
+        console.log(`Created placeholder file at ${fallbackPath}`);
       }
       
-      return newFilename;
+      return fallbackFilename;
     }
     
-    // Use the path we found if videoPath is undefined
-    const actualVideoPath = videoPath || foundVideoPath;
+    console.log(`Using video file: ${foundVideoFile.filename} (${foundVideoFile.size} bytes)`);
     
-    // Get the actual filename from the videoPath
-    const originalFilename = path.basename(actualVideoPath);
-    console.log(`Recorded video saved as: ${originalFilename}`);
-    
-    // Verify the file has content
-    try {
-      const stats = fs.statSync(actualVideoPath);
-      console.log(`Original video file size: ${stats.size} bytes`);
-      
-      if (stats.size === 0) {
-        console.warn('Warning: Recorded video has 0 bytes. Creating a placeholder instead.');
-        
-        // Even if the original video is 0 bytes, we might have another valid webm file to use
-        const alternateVideoPath = findPlaywrightRecording(uploadsDir);
-        if (alternateVideoPath && alternateVideoPath !== actualVideoPath) {
-          console.log(`Found alternative video file: ${alternateVideoPath}`);
-          const altStats = fs.statSync(alternateVideoPath);
-          
-          if (altStats.size > 0) {
-            console.log(`Using alternative video file with size: ${altStats.size} bytes`);
-            fs.copyFileSync(alternateVideoPath, destinationPath);
-            console.log(`Copied recording from ${path.basename(alternateVideoPath)} to ${newFilename}`);
-            
-            // Return the new filename after successful copy
-            return newFilename;
-          }
-        }
-        
-        // If we couldn't find an alternative, create a placeholder
-        fs.writeFileSync(destinationPath, "EMPTY_RECORDING");
-        return newFilename;
-      }
-    } catch (statError) {
-      console.error(`Error checking video file: ${statError.message}`);
-    }
-    
-    // Copy the file with our new filename to ensure consistency
-    try {
-      // Check if the original file exists
-      if (fs.existsSync(actualVideoPath)) {
-        // Copy the file with our new filename
-        fs.copyFileSync(actualVideoPath, destinationPath);
-        console.log(`Copied recording from ${originalFilename} to ${newFilename}`);
-        
-        // Verify the copied file
-        const destStats = fs.statSync(destinationPath);
-        console.log(`Copied file size: ${destStats.size} bytes`);
-        
-        // If the copied file has 0 bytes but original had content, something went wrong with the copy
-        if (destStats.size === 0) {
-          console.warn('Warning: Copied file has 0 bytes but original had content. Trying different copy method.');
-          
-          // Try a different copy method using a buffer
-          try {
-            const fileBuffer = fs.readFileSync(actualVideoPath);
-            fs.writeFileSync(destinationPath, fileBuffer);
-            console.log(`Copied file using buffer method, new size: ${fs.statSync(destinationPath).size} bytes`);
-          } catch (bufferCopyError) {
-            console.error(`Buffer copy method failed: ${bufferCopyError.message}`);
-          }
-        }
-        
-        // Remove the original file to avoid accumulating duplicate recordings
-        try {
-          fs.unlinkSync(actualVideoPath);
-          console.log(`Removed original recording file ${originalFilename}`);
-        } catch (unlinkError) {
-          console.error(`Could not remove original file: ${unlinkError.message}`);
-          // Continue execution - the copy succeeded
-        }
-      } else {
-        console.error(`Original file not found at: ${actualVideoPath}`);
-        // Create an empty placeholder file
-        fs.writeFileSync(destinationPath, "MISSING_SOURCE_VIDEO");
-        console.log(`Created placeholder for missing source file at ${destinationPath}`);
-      }
-    } catch (fsError) {
-      console.error('Error handling recording file:', fsError);
-      // If there's an error with the file operation, still return our newFilename
-      console.log(`Returning filename despite file errors: ${newFilename}`);
-    }
-    
-    console.log(`Recording process completed: ${newFilename}`);
-    return newFilename;
+    // Simply return the filename of the found video without renaming
+    return foundVideoFile.filename;
   } catch (error) {
     console.error('Recording error:', error);
     throw error;
