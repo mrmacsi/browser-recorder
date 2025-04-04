@@ -24,6 +24,10 @@ const numCPUs = os.cpus().length;
 const totalMemory = os.totalmem();
 console.log(`System has ${numCPUs} CPU cores and ${Math.round(totalMemory / 1024 / 1024 / 1024)}GB total memory`);
 
+// Configure video optimization based on system resources
+const VIDEO_FPS = 30; // Higher FPS for smoother recording
+const ACTIVITY_DELAY = 200; // Reduced from 300ms for smoother activity
+
 // Function to check if browsers are installed
 async function ensureBrowsersInstalled() {
   try {
@@ -66,7 +70,7 @@ async function generatePageActivity(page, durationMs) {
       await page.evaluate(() => {
         const scrollAmount = Math.floor(Math.random() * 500);
         window.scrollBy(0, scrollAmount);
-        setTimeout(() => window.scrollBy(0, -scrollAmount), 500);
+        setTimeout(() => window.scrollBy(0, -scrollAmount), 300); // Reduced from 500ms for smoother scrolling
       });
       
       // Move mouse randomly (if the page is still active)
@@ -90,7 +94,7 @@ async function generatePageActivity(page, durationMs) {
   while (Date.now() < endTime) {
     await performActivity();
     // Wait a short time between activities
-    await new Promise(resolve => setTimeout(resolve, 300));
+    await new Promise(resolve => setTimeout(resolve, ACTIVITY_DELAY));
   }
   
   console.log('Page activity completed');
@@ -163,7 +167,13 @@ async function recordWebsite(url, duration = 10) {
         '--disable-accelerated-2d-canvas',
         '--no-first-run',
         '--no-zygote',
-        '--disable-gpu'
+        '--disable-gpu',
+        '--high-dpi-support=1',
+        '--force-device-scale-factor=1',
+        '--js-flags=--max-old-space-size=4096',
+        `--renderer-process-limit=${Math.max(4, numCPUs)}`,
+        '--disable-web-security',
+        '--autoplay-policy=no-user-gesture-required'
       ]
     });
   } catch (error) {
@@ -177,28 +187,33 @@ async function recordWebsite(url, duration = 10) {
   }
 
   try {
-    // Create a browser context with video recording enabled
+    // Create a browser context with video recording enabled with improved settings
     const context = await browser.newContext({
       viewport: { width: 1280, height: 720 },
       recordVideo: {
         dir: uploadsDir,
-        size: { width: 1280, height: 720 }
-      }
+        size: { width: 1280, height: 720 },
+        fps: VIDEO_FPS // Set higher FPS for smoother recording
+      },
+      ignoreHTTPSErrors: true, // Ignore HTTPS errors for better performance
     });
 
+    // Set default timeout to improve performance
+    context.setDefaultTimeout(30000); // 30 seconds is usually sufficient
+    
     // Create a new page
     const page = await context.newPage();
     
     console.log(`Loading page: ${url}`);
     try {
-      // Navigate to the URL with appropriate wait conditions
+      // Navigate to the URL with optimized wait conditions
       await page.goto(url, { 
-        waitUntil: 'networkidle',
-        timeout: 60000 
+        waitUntil: 'domcontentloaded', // Changed from 'networkidle' to improve performance
+        timeout: 30000 // Reduced timeout for faster loading
       });
       
-      // Allow page to stabilize
-      await page.waitForTimeout(1000);
+      // Reduced stabilization time
+      await page.waitForTimeout(500); // Reduced from 1000ms
       
       // Add some interactivity to make sure the video has content
       console.log(`Generating page activity for better recording...`);
