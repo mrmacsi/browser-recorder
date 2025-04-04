@@ -25,15 +25,10 @@ const totalMemory = os.totalmem();
 console.log(`System has ${numCPUs} CPU cores and ${Math.round(totalMemory / 1024 / 1024 / 1024)}GB total memory`);
 
 // Configure video optimization based on system resources
-const VIDEO_FPS = 20; // Reduced for better server performance with smoother result
-const ACTIVITY_DELAY = 100; // Further reduced for smoother activity
+const VIDEO_FPS = 24; // Optimal FPS for smooth playback while reducing CPU load
+const ACTIVITY_DELAY = 150; // Further reduced for smoother activity
 const VIDEO_WIDTH = 1280;
 const VIDEO_HEIGHT = 720;
-const VIDEO_SCALE = 0.75; // Scale down to 75% for better performance
-
-// Environment variables for better performance
-process.env.PLAYWRIGHT_BROWSERS_PATH = '/home/azureuser/.cache/ms-playwright';
-process.env.PLAYWRIGHT_SKIP_VALIDATE_HOST_REQUIREMENTS = '1';
 
 // Function to check if browsers are installed
 async function ensureBrowsersInstalled() {
@@ -73,38 +68,20 @@ async function generatePageActivity(page, durationMs) {
   // Create a function to perform random scrolling and movement
   const performActivity = async () => {
     try {
-      // Use smoother animation with requestAnimationFrame
+      // Scroll randomly
       await page.evaluate(() => {
-        return new Promise(resolve => {
-          const scrollAmount = Math.floor(Math.random() * 300); // Reduced range for smoother scrolling
-          
-          // Use smooth scroll for better animation
-          window.scrollBy({
-            top: scrollAmount,
-            behavior: 'smooth'
-          });
-          
-          // Use requestAnimationFrame for smoother animation
-          requestAnimationFrame(() => {
-            setTimeout(() => {
-              window.scrollBy({
-                top: -scrollAmount,
-                behavior: 'smooth'
-              });
-              resolve();
-            }, 200); // Reduced from 300ms for smoother motion
-          });
-        });
+        const scrollAmount = Math.floor(Math.random() * 500);
+        window.scrollBy(0, scrollAmount);
+        setTimeout(() => window.scrollBy(0, -scrollAmount), 300); // Reduced from 500ms for smoother scrolling
       });
       
-      // Smoother mouse movement
+      // Move mouse randomly (if the page is still active)
       try {
         const viewportSize = await page.viewportSize();
         if (viewportSize) {
           await page.mouse.move(
             Math.floor(Math.random() * viewportSize.width),
-            Math.floor(Math.random() * viewportSize.height),
-            { steps: 10 } // Use more steps for smoother animation
+            Math.floor(Math.random() * viewportSize.height)
           );
         }
       } catch (mouseError) {
@@ -159,54 +136,6 @@ function findPlaywrightRecording(directory) {
   }
 }
 
-// Improved browser launch configuration
-async function launchOptimizedBrowser() {
-  return await chromium.launch({
-    headless: true,
-    executablePath: process.env.CHROME_PATH, // Use system Chrome if available
-    chromiumSandbox: false, 
-    args: [
-      '--no-sandbox',
-      '--disable-setuid-sandbox',
-      '--disable-dev-shm-usage',
-      '--disable-accelerated-2d-canvas',
-      '--no-first-run',
-      '--no-zygote',
-      '--disable-gpu', 
-      '--high-dpi-support=1',
-      '--force-device-scale-factor=1',
-      '--js-flags=--max-old-space-size=4096',
-      `--renderer-process-limit=${Math.max(4, numCPUs)}`,
-      '--disable-web-security',
-      '--autoplay-policy=no-user-gesture-required',
-      '--disable-extensions',
-      '--disable-background-networking',
-      '--disable-background-timer-throttling',
-      '--disable-backgrounding-occluded-windows',
-      '--disable-breakpad',
-      '--disable-component-extensions-with-background-pages',
-      '--disable-features=TranslateUI,BlinkGenPropertyTrees',
-      '--disable-ipc-flooding-protection',
-      '--disable-renderer-backgrounding',
-      '--mute-audio', 
-      '--disable-sync',
-      `--use-gl=swiftshader`,
-      '--disable-speech-api',
-      `--memory-pressure-off`,
-      '--font-render-hinting=none',
-      '--disable-hang-monitor',
-      '--disable-client-side-phishing-detection',
-      '--disable-default-apps',
-      '--no-default-browser-check',
-      '--disable-translate',
-      '--disable-domain-reliability',
-      '--disable-component-update',
-      `--window-size=${Math.floor(VIDEO_WIDTH*VIDEO_SCALE)},${Math.floor(VIDEO_HEIGHT*VIDEO_SCALE)}`, // Smaller window size
-      '--blink-settings=primaryHoverType=2,availableHoverTypes=2,primaryPointerType=4,availablePointerTypes=4',
-    ]
-  });
-}
-
 async function recordWebsite(url, duration = 10) {
   console.log(`Preparing to record ${url} for ${duration} seconds with Playwright...`);
   
@@ -228,10 +157,43 @@ async function recordWebsite(url, duration = 10) {
   const blankFilename = `blank-${uuidv4()}.webm`;
   const blankPath = path.join(uploadsDir, blankFilename);
   
-  // Launch browser with improved settings for better performance
+  // Launch browser with appropriate configuration
   let browser;
   try {
-    browser = await launchOptimizedBrowser();
+    browser = await chromium.launch({
+      headless: true,
+      executablePath: process.env.CHROME_PATH, // Use system Chrome if available
+      chromiumSandbox: false, // Disable sandbox for better performance
+      args: [
+        '--no-sandbox',
+        '--disable-setuid-sandbox',
+        '--disable-dev-shm-usage',
+        '--disable-accelerated-2d-canvas',
+        '--no-first-run',
+        '--no-zygote',
+        '--disable-gpu',
+        '--high-dpi-support=1',
+        '--force-device-scale-factor=1',
+        '--js-flags=--max-old-space-size=4096',
+        `--renderer-process-limit=${Math.max(4, numCPUs)}`,
+        '--disable-web-security',
+        '--autoplay-policy=no-user-gesture-required',
+        '--disable-extensions',
+        '--disable-background-networking',
+        '--disable-background-timer-throttling',
+        '--disable-backgrounding-occluded-windows',
+        '--disable-breakpad',
+        '--disable-component-extensions-with-background-pages',
+        '--disable-features=TranslateUI,BlinkGenPropertyTrees',
+        '--disable-ipc-flooding-protection',
+        '--disable-renderer-backgrounding',
+        '--mute-audio',
+        '--disable-sync',
+        `--use-gl=swiftshader`,
+        '--disable-speech-api',
+        `--memory-pressure-off`
+      ]
+    });
   } catch (error) {
     console.error('Failed to launch browser:', error.message);
     if (error.message.includes("Executable doesn't exist")) {
@@ -243,91 +205,40 @@ async function recordWebsite(url, duration = 10) {
   }
 
   try {
-    // Pre-load typical web fonts to improve rendering
-    const fontPreloadContext = await browser.newContext();
-    const fontPreloadPage = await fontPreloadContext.newPage();
-    await fontPreloadPage.goto('about:blank');
-    await fontPreloadPage.evaluate(() => {
-      const fontFaceSet = new FontFace('Arial', 'local("Arial")');
-      document.fonts.add(fontFaceSet);
-    });
-    await fontPreloadContext.close();
-    
-    // Create browser context with smaller viewport for better performance
-    const scaledWidth = Math.floor(VIDEO_WIDTH * VIDEO_SCALE);
-    const scaledHeight = Math.floor(VIDEO_HEIGHT * VIDEO_SCALE);
-    
     // Create a browser context with video recording enabled with improved settings
     const context = await browser.newContext({
-      viewport: { width: scaledWidth, height: scaledHeight },
+      viewport: { width: VIDEO_WIDTH, height: VIDEO_HEIGHT },
       recordVideo: {
         dir: uploadsDir,
-        size: { width: VIDEO_WIDTH, height: VIDEO_HEIGHT }, // Keep output resolution high
+        size: { width: VIDEO_WIDTH, height: VIDEO_HEIGHT },
         fps: VIDEO_FPS
       },
       ignoreHTTPSErrors: true,
-      bypassCSP: true,
-      deviceScaleFactor: 1.0,
-      hasTouch: false,
-      isMobile: false,
+      bypassCSP: true, // Bypass Content-Security-Policy for better performance
+      deviceScaleFactor: 1.0, // Use exact 1.0 scale factor for better performance
+      hasTouch: false, // Disable touch for better performance
+      isMobile: false, // Disable mobile emulation
       javaScriptEnabled: true,
-      userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/96.0.4664.110 Safari/537.36',
-      serviceWorkers: 'block', // Disable service workers for better performance
-      permissions: ['clipboard-read', 'clipboard-write'], // Allow clipboard for better interaction
+      userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/96.0.4664.110 Safari/537.36', // Use a standard UA
     });
 
     // Optimize context performance
     context.setDefaultNavigationTimeout(30000);
     context.setDefaultTimeout(20000);
     
-    // Create a new page with performance optimization
+    // Create a new page
     const page = await context.newPage();
-    
-    // Set up smooth animation
-    await page.addInitScript(() => {
-      // Override requestAnimationFrame for smoother animations
-      const originalRAF = window.requestAnimationFrame;
-      window.requestAnimationFrame = callback => {
-        return originalRAF.call(window, time => {
-          try {
-            callback(time);
-          } catch (e) {
-            console.error('RAF error:', e);
-          }
-        });
-      };
-    });
     
     console.log(`Loading page: ${url}`);
     try {
-      // Add performance observer to monitor performance
-      await page.evaluate(() => {
-        if (window.PerformanceObserver) {
-          const observer = new PerformanceObserver(list => {
-            list.getEntries().forEach(entry => {
-              if (entry.entryType === 'longtask' && entry.duration > 50) {
-                console.warn(`Long task detected: ${entry.duration}ms`);
-              }
-            });
-          });
-          observer.observe({ entryTypes: ['longtask', 'paint', 'frame'] });
-        }
-      });
-      
       // Navigate to the URL with optimized wait conditions
       await page.goto(url, { 
-        waitUntil: 'domcontentloaded', 
-        timeout: 30000 
+        waitUntil: 'domcontentloaded', // Changed from 'networkidle' to improve performance
+        timeout: 30000 // Reduced timeout for faster loading
       });
       
-      // Let the page stabilize first with reduced initial activity
-      await page.waitForTimeout(500);
-      
-      // Set animation frame rate to match our recording FPS
-      await page.evaluate((targetFps) => {
-        window.__animationFrameInterval = 1000 / targetFps;
-        console.log(`Setting animation frame interval to ${window.__animationFrameInterval}ms`);
-      }, VIDEO_FPS);
+      // Reduced stabilization time
+      await page.waitForTimeout(500); // Reduced from 1000ms
       
       // Add some interactivity to make sure the video has content
       console.log(`Generating page activity for better recording...`);
