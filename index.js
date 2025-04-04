@@ -61,37 +61,69 @@ app.post('/api/record', async (req, res) => {
       fs.mkdirSync(uploadsDir, { recursive: true });
     }
     
-    const filename = await recordWebsite(url, duration);
+    // Get the initial files in uploads directory
+    const initialFiles = fs.readdirSync(uploadsDir)
+      .filter(file => file.endsWith('.webm'))
+      .map(file => ({
+        name: file,
+        time: fs.statSync(path.join(uploadsDir, file)).mtime.getTime()
+      }));
     
-    // Check if the file exists
-    const filePath = path.join(uploadsDir, filename);
-    let fileSize = null;
+    // Record the website - this will create a new file in uploads directory
+    await recordWebsite(url, duration);
     
-    if (!fs.existsSync(filePath)) {
-      console.error(`Warning: Generated file ${filePath} does not exist`);
-    } else {
-      console.log(`File exists and is ready to be served: ${filePath}`);
-      // Get file size for logging
-      const stats = fs.statSync(filePath);
-      fileSize = stats.size;
-      console.log(`File size: ${fileSize} bytes`);
+    // Get all files in uploads directory after recording
+    const afterFiles = fs.readdirSync(uploadsDir)
+      .filter(file => file.endsWith('.webm'))
+      .map(file => ({
+        name: file,
+        path: path.join(uploadsDir, file),
+        time: fs.statSync(path.join(uploadsDir, file)).mtime.getTime(),
+        size: fs.statSync(path.join(uploadsDir, file)).size
+      }))
+      .sort((a, b) => b.time - a.time); // Sort by most recent
+    
+    // Find the most recent file that wasn't there before
+    let newFiles = afterFiles.filter(file => 
+      !initialFiles.some(initial => initial.name === file.name) || 
+      initialFiles.some(initial => initial.name === file.name && initial.time < file.time)
+    );
+    
+    // If we didn't find any new files, just use the most recent file
+    if (newFiles.length === 0 && afterFiles.length > 0) {
+      console.log('No new files found. Using the most recent file.');
+      newFiles = [afterFiles[0]];
     }
+    
+    // Check if we found any file
+    if (newFiles.length === 0) {
+      console.error('No video files found after recording');
+      return res.status(500).json({
+        success: false,
+        error: 'Recording failed',
+        message: 'No video files found after recording'
+      });
+    }
+    
+    // Use the most recent file
+    const videoFile = newFiles[0];
+    console.log(`Using video file: ${videoFile.name} (${videoFile.size} bytes)`);
     
     // Get the host from request
     const host = req.get('host');
     const protocol = req.protocol;
     
     // Build the absolute URL
-    const fileUrl = `/uploads/${filename}`;
-    const absoluteUrl = `${protocol}://${host}/uploads/${filename}`;
+    const fileUrl = `/uploads/${videoFile.name}`;
+    const absoluteUrl = `${protocol}://${host}/uploads/${videoFile.name}`;
     
     // Return the recording details
     res.json({
       success: true,
-      filename,
+      filename: videoFile.name,
       url: fileUrl,
       absoluteUrl: absoluteUrl,
-      fileSize
+      fileSize: videoFile.size
     });
   } catch (error) {
     console.error('Error during recording:', error);
