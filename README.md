@@ -13,7 +13,7 @@ A service for recording website interactions and animations using headless brows
 
 ```bash
 # Clone the repository
-git clone https://github.com/yourusername/browser-recorder.git
+git clone https://github.com/mrmacsi/browser-recorder.git
 cd browser-recorder
 
 # Install dependencies

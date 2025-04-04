@@ -15,7 +15,7 @@ echo "Installing on $DISTRO $UBUNTU_VERSION"
 REPO_DIR="browser-recorder"
 if [ ! -d "$REPO_DIR" ]; then
   # Clone repository (replace with your actual repo URL)
-  git clone https://github.com/yourusername/browser-recorder.git $REPO_DIR
+  git clone https://github.com/mrmacsi/browser-recorder.git $REPO_DIR
   cd $REPO_DIR
 else
   # Update existing repository
