@@ -31,44 +31,11 @@ const VIDEO_WIDTH = 1024; // Reduced from 1280 to improve performance
 const VIDEO_HEIGHT = 576; // Reduced from 720 to improve performance (16:9 ratio maintained)
 const FFMPEG_PATH = process.env.FFMPEG_PATH || 'ffmpeg'; // Path to ffmpeg for post-processing
 
-// Common browser executable paths on different platforms
-const CHROME_PATHS = [
-  process.env.CHROME_PATH, // Use env variable if set
-  '/usr/bin/chromium-browser',
-  '/usr/bin/chromium',
-  '/usr/bin/google-chrome',
-  '/usr/bin/google-chrome-stable',
-  '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
-  '/Applications/Chromium.app/Contents/MacOS/Chromium',
-  '/opt/homebrew/bin/chromium',
-  'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
-  'C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe'
-];
-
-// Function to find a valid browser executable
-function findBrowserExecutable() {
-  for (const browserPath of CHROME_PATHS) {
-    if (browserPath && fs.existsSync(browserPath)) {
-      console.log(`Found browser executable at: ${browserPath}`);
-      return browserPath;
-    }
-  }
-  console.log('No specific browser path found, using Playwright\'s default browser');
-  return null; // Let Playwright use its default browser
-}
-
 // Function to check if browsers are installed
 async function ensureBrowsersInstalled() {
   try {
     // Try a simple browser launch to check if browsers are installed
-    const browserPath = findBrowserExecutable();
-    const launchOptions = { headless: true };
-    
-    if (browserPath) {
-      launchOptions.executablePath = browserPath;
-    }
-    
-    const browser = await chromium.launch(launchOptions);
+    const browser = await chromium.launch({ headless: true });
     await browser.close();
     return true;
   } catch (error) {
@@ -191,15 +158,12 @@ async function recordWebsite(url, duration = 10) {
   const blankFilename = `blank-${uuidv4()}.webm`;
   const blankPath = path.join(uploadsDir, blankFilename);
   
-  // Find a valid browser executable
-  const browserExecutablePath = findBrowserExecutable();
-  console.log(`Using browser executable: ${browserExecutablePath || 'Playwright default'}`);
-  
   // Launch browser with appropriate configuration
   let browser;
   try {
-    const launchOptions = {
+    browser = await chromium.launch({
       headless: true,
+      executablePath: process.env.CHROME_PATH || '/usr/bin/chromium-browser', // Use system Chromium with fallback
       chromiumSandbox: false, // Disable sandbox for better performance
       timeout: 60000, // Longer timeout for startup
       args: [
@@ -241,34 +205,15 @@ async function recordWebsite(url, duration = 10) {
         `--disable-threaded-scrolling`, // Disable threaded scrolling
         `--run-all-compositor-stages-before-draw` // Ensure smooth visual rendering
       ]
-    };
-    
-    // Only set executablePath if we found a valid browser
-    if (browserExecutablePath) {
-      launchOptions.executablePath = browserExecutablePath;
-    }
-    
-    browser = await chromium.launch(launchOptions);
+    });
   } catch (error) {
     console.error('Failed to launch browser:', error.message);
-    
-    // Try to launch without custom executable path if that was the issue
-    if (error.message.includes("Executable doesn't exist") && browserExecutablePath) {
-      console.log('Trying to launch with Playwright default browser...');
-      try {
-        browser = await chromium.launch({
-          headless: true,
-          args: ['--no-sandbox', '--disable-setuid-sandbox']
-        });
-      } catch (fallbackError) {
-        console.error('Fallback browser launch also failed:', fallbackError.message);
-        throw new Error(
-          "Playwright browser not found. Please run 'npx playwright install' to download the required browsers."
-        );
-      }
-    } else {
-      throw error;
+    if (error.message.includes("Executable doesn't exist")) {
+      throw new Error(
+        "Playwright browser not found. Please run 'npx playwright install' to download the required browsers."
+      );
     }
+    throw error;
   }
 
   try {
