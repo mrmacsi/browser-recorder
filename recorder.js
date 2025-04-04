@@ -25,10 +25,11 @@ const totalMemory = os.totalmem();
 console.log(`System has ${numCPUs} CPU cores and ${Math.round(totalMemory / 1024 / 1024 / 1024)}GB total memory`);
 
 // Configure video optimization based on system resources
-const VIDEO_FPS = 24; // Optimal FPS for smooth playback while reducing CPU load
-const ACTIVITY_DELAY = 150; // Further reduced for smoother activity
-const VIDEO_WIDTH = 1280;
-const VIDEO_HEIGHT = 720;
+const VIDEO_FPS = 30; // Increased to 30 FPS for smoother video
+const ACTIVITY_DELAY = 100; // Further decreased delay for smoother activity
+const VIDEO_WIDTH = 1024; // Reduced from 1280 to improve performance
+const VIDEO_HEIGHT = 576; // Reduced from 720 to improve performance (16:9 ratio maintained)
+const FFMPEG_PATH = process.env.FFMPEG_PATH || 'ffmpeg'; // Path to ffmpeg for post-processing
 
 // Function to check if browsers are installed
 async function ensureBrowsersInstalled() {
@@ -162,8 +163,9 @@ async function recordWebsite(url, duration = 10) {
   try {
     browser = await chromium.launch({
       headless: true,
-      executablePath: process.env.CHROME_PATH, // Use system Chrome if available
+      executablePath: process.env.CHROME_PATH || '/usr/bin/chromium-browser', // Use system Chromium with fallback
       chromiumSandbox: false, // Disable sandbox for better performance
+      timeout: 60000, // Longer timeout for startup
       args: [
         '--no-sandbox',
         '--disable-setuid-sandbox',
@@ -174,8 +176,8 @@ async function recordWebsite(url, duration = 10) {
         '--disable-gpu',
         '--high-dpi-support=1',
         '--force-device-scale-factor=1',
-        '--js-flags=--max-old-space-size=4096',
-        `--renderer-process-limit=${Math.max(4, numCPUs)}`,
+        '--js-flags=--max-old-space-size=8192', // Increased memory allocation
+        `--renderer-process-limit=${Math.max(6, numCPUs)}`, // Allow more renderer processes
         '--disable-web-security',
         '--autoplay-policy=no-user-gesture-required',
         '--disable-extensions',
@@ -184,14 +186,24 @@ async function recordWebsite(url, duration = 10) {
         '--disable-backgrounding-occluded-windows',
         '--disable-breakpad',
         '--disable-component-extensions-with-background-pages',
-        '--disable-features=TranslateUI,BlinkGenPropertyTrees',
+        '--disable-features=TranslateUI,BlinkGenPropertyTrees,ScriptStreaming',
         '--disable-ipc-flooding-protection',
         '--disable-renderer-backgrounding',
         '--mute-audio',
         '--disable-sync',
-        `--use-gl=swiftshader`,
+        '--use-gl=swiftshader',
         '--disable-speech-api',
-        `--memory-pressure-off`
+        '--memory-pressure-off',
+        '--disable-hang-monitor',
+        '--disable-domain-reliability',
+        '--disable-histogram-customizer',
+        '--single-process', // Use single process mode for better video performance
+        '--deterministic-mode', // More consistent timing
+        '--aggressive-cache-discard', // Prevent memory bloat
+        `--disable-features=site-per-process`, // Disable site isolation
+        `--disable-threaded-animation`, // Disable threaded animation
+        `--disable-threaded-scrolling`, // Disable threaded scrolling
+        `--run-all-compositor-stages-before-draw` // Ensure smooth visual rendering
       ]
     });
   } catch (error) {
@@ -214,13 +226,26 @@ async function recordWebsite(url, duration = 10) {
         fps: VIDEO_FPS
       },
       ignoreHTTPSErrors: true,
-      bypassCSP: true, // Bypass Content-Security-Policy for better performance
-      deviceScaleFactor: 1.0, // Use exact 1.0 scale factor for better performance
-      hasTouch: false, // Disable touch for better performance
-      isMobile: false, // Disable mobile emulation
+      bypassCSP: true,
+      deviceScaleFactor: 1.0,
+      hasTouch: false,
+      isMobile: false,
       javaScriptEnabled: true,
-      userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/96.0.4664.110 Safari/537.36', // Use a standard UA
+      userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/96.0.4664.110 Safari/537.36',
+      extraHTTPHeaders: {
+        'Accept-Language': 'en-US,en;q=0.9'
+      },
+      offline: false,
+      permissions: ['animations']
     });
+
+    // Force garbage collection to free memory before recording
+    try {
+      global.gc();
+      console.log('Forced garbage collection before recording');
+    } catch (e) {
+      console.log('Could not force garbage collection (Node.js started without --expose-gc)');
+    }
 
     // Optimize context performance
     context.setDefaultNavigationTimeout(30000);
@@ -274,8 +299,41 @@ async function recordWebsite(url, duration = 10) {
     
     console.log(`Using video file: ${foundVideoFile.filename} (${foundVideoFile.size} bytes)`);
     
-    // Simply return the filename of the found video without renaming
-    return foundVideoFile.filename;
+    // After finding video file, try to improve its quality with ffmpeg if available
+    if (foundVideoFile) {
+      try {
+        // Attempt to improve video quality with ffmpeg if available
+        const originalPath = foundVideoFile.path;
+        const enhancedPath = path.join(uploadsDir, `enhanced-${foundVideoFile.filename}`);
+        
+        try {
+          // Check if ffmpeg is available
+          execSync(`${FFMPEG_PATH} -version`, { stdio: 'ignore' });
+          
+          // Enhance video with ffmpeg for smoother playback
+          console.log(`Enhancing video with ffmpeg: ${enhancedPath}`);
+          execSync(`${FFMPEG_PATH} -y -i "${originalPath}" -c:v libvpx-vp9 -b:v 2M -deadline realtime -cpu-used 0 -pix_fmt yuv420p "${enhancedPath}"`, { 
+            stdio: 'inherit',
+            timeout: 60000 // 60 second timeout
+          });
+          
+          // If enhancement succeeded, use the enhanced file
+          if (fs.existsSync(enhancedPath) && fs.statSync(enhancedPath).size > 0) {
+            console.log(`Using enhanced video: ${enhancedPath}`);
+            return path.basename(enhancedPath);
+          } else {
+            console.log(`Enhanced video creation failed or resulted in empty file. Using original video.`);
+            return foundVideoFile.filename;
+          }
+        } catch (ffmpegError) {
+          console.warn(`FFmpeg enhancement failed: ${ffmpegError.message}. Using original video.`);
+          return foundVideoFile.filename;
+        }
+      } catch (enhancementError) {
+        console.warn(`Video enhancement error: ${enhancementError.message}. Using original video.`);
+        return foundVideoFile.filename;
+      }
+    }
   } catch (error) {
     console.error('Recording error:', error);
     throw error;
