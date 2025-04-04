@@ -90,7 +90,9 @@ az vm create \
     --size "$VM_SIZE" \
     --image "$IMAGE" \
     --admin-username azureuser \
-    --generate-ssh-keys
+    --generate-ssh-keys \
+    --public-ip-sku Standard \
+    --nsg-rule SSH
 
 if [ $? -ne 0 ]; then
     echo "Failed to create VM. Exiting."
@@ -100,6 +102,22 @@ fi
 # Get the public IP address
 PUBLIC_IP=$(az vm show -d -g "$RESOURCE_GROUP" -n "$VM_NAME" --query publicIps -o tsv)
 echo "VM $VM_NAME created with public IP: $PUBLIC_IP"
+
+# Open port 5001 for browser recorder service
+echo "Opening port 5001 for browser recorder service..."
+az network nsg rule create \
+    --resource-group "$RESOURCE_GROUP" \
+    --nsg-name "${VM_NAME}NSG" \
+    --name BrowserRecorderPort \
+    --protocol tcp \
+    --priority 1001 \
+    --destination-port-range 5001 \
+    --access allow
+
+if [ $? -ne 0 ]; then
+    echo "Failed to open port 5001. You may need to open it manually."
+    echo "Run the following command to open the port: az network nsg rule create --resource-group $RESOURCE_GROUP --nsg-name ${VM_NAME}NSG --name BrowserRecorderPort --protocol tcp --priority 1001 --destination-port-range 5001 --access allow"
+fi
 
 # Wait for the VM to be fully provisioned
 echo "Waiting for VM to be ready..."
@@ -143,5 +161,18 @@ az vm run-command invoke \
     --command-id RunShellScript \
     --scripts "cd /home/azureuser/project && if [ -f install.sh ]; then chmod +x install.sh && ./install.sh; fi && npm install"
 
+echo "Verifying the service is running correctly..."
+az vm run-command invoke \
+    --resource-group "$RESOURCE_GROUP" \
+    --name "$VM_NAME" \
+    --command-id RunShellScript \
+    --scripts "curl -s http://localhost:5001/api/health || echo 'Health check failed'"
+
 echo "Setup complete. You can SSH into the VM using: ssh azureuser@$PUBLIC_IP"
-echo "Your application is now running on VM: $VM_NAME" 
+echo "Your application is running at: http://$PUBLIC_IP:5001"
+echo "API endpoints:"
+echo "  - GET http://$PUBLIC_IP:5001/api/health - Check service health"
+echo "  - POST http://$PUBLIC_IP:5001/api/record - Record a website"
+echo "  - GET http://$PUBLIC_IP:5001/uploads/[filename] - Access recorded videos"
+echo ""
+echo "IMPORTANT: Only HTTP is supported. Do not use HTTPS when accessing the service." 

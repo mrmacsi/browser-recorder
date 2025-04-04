@@ -27,6 +27,22 @@ if (process.env.NODE_ENV !== 'production') {
 // Parse JSON request bodies
 app.use(express.json());
 
+// Check for HTTPS requests - redirect to HTTP if needed
+app.use((req, res, next) => {
+  // Check if the original request was HTTPS
+  const forwardedProto = req.headers['x-forwarded-proto'];
+  
+  if (forwardedProto === 'https') {
+    // If it's an HTTPS request coming through a proxy
+    const host = req.headers.host;
+    const newUrl = `http://${host}${req.originalUrl}`;
+    console.log(`HTTPS detected, redirecting to HTTP: ${newUrl}`);
+    return res.redirect(newUrl);
+  }
+  
+  next();
+});
+
 // Serve static files from the uploads directory with explicit MIME types
 app.use('/uploads', (req, res, next) => {
   // Set the correct MIME type for webm files
@@ -94,6 +110,47 @@ app.get('/api/health', (req, res) => {
     status: 'ok',
     timestamp: new Date().toISOString()
   });
+});
+
+// List all recordings endpoint
+app.get('/api/files', (req, res) => {
+  try {
+    const files = fs.readdirSync(uploadsDir)
+      .filter(file => file.endsWith('.webm'))
+      .map(file => ({
+        filename: file,
+        url: `/uploads/${file}`,
+        size: fs.statSync(path.join(uploadsDir, file)).size,
+        created: fs.statSync(path.join(uploadsDir, file)).mtime.toISOString()
+      }));
+    
+    res.json({
+      count: files.length,
+      files
+    });
+  } catch (error) {
+    res.status(500).json({
+      error: 'Server error',
+      message: error.message
+    });
+  }
+});
+
+// Add a more descriptive error for HTTPS URLs
+app.get('/https:*', (req, res) => {
+  const host = req.get('host');
+  const correctUrl = `http://${host}/api/health`;
+  
+  res.status(400).send(`
+    <html>
+      <head><title>HTTP Only Service</title></head>
+      <body>
+        <h1>This service only supports HTTP</h1>
+        <p>Please use <a href="${correctUrl}">${correctUrl}</a> instead.</p>
+        <p>The URL you tried to access appears to be using HTTPS, which is not supported by this service.</p>
+      </body>
+    </html>
+  `);
 });
 
 // Start the server

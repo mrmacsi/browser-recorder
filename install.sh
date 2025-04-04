@@ -42,6 +42,10 @@ sudo apt-get install -y \
   libnss3 \
   libgbm1
 
+# Kill any existing processes that might be using port 5001
+echo "Ensuring port 5001 is free..."
+sudo lsof -ti:5001 | xargs -r sudo kill || true
+
 # Stop any existing PM2 processes to avoid port conflicts
 if command -v pm2 &> /dev/null; then
   echo "Stopping any existing PM2 processes..."
@@ -65,9 +69,11 @@ fi
 
 # Setup PM2 service - ensure clean start
 echo "Setting up PM2 service..."
+pm2 delete browser-recorder || true
 pm2 start index.js --name browser-recorder
 pm2 save
-pm2 startup
+sudo env PATH=$PATH:/usr/bin pm2 startup systemd -u $USER --hp $HOME || true
+sudo systemctl enable pm2-$USER || true
 
 # Check if browser-recorder is actually running
 if pm2 info browser-recorder | grep -q "online"; then
@@ -78,8 +84,23 @@ else
   exit 1
 fi
 
+# Verify API endpoints are accessible
+echo "Verifying API endpoints..."
+HEALTH_CHECK=$(curl -s http://localhost:5001/api/health || echo "Failed to connect")
+if [[ $HEALTH_CHECK == *"status"*"ok"* ]]; then
+  echo "Health check endpoint verified"
+else
+  echo "WARNING: Health check endpoint may not be working properly"
+  echo "Response: $HEALTH_CHECK"
+fi
+
 # Display server status
 pm2 list
 
 echo "Installation complete!"
 echo "Browser Recorder should be accessible at http://localhost:5001"
+echo "API endpoints:"
+echo "  - POST /api/record - Record a website"
+echo "  - GET /api/files - List all recordings"
+echo "  - GET /api/health - Check service health"
+echo "  - GET /uploads/[filename] - Access recorded videos"
