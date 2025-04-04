@@ -1,0 +1,25 @@
+{
+  "name": "browser-recorder",
+  "version": "1.0.0",
+  "main": "index.js",
+  "scripts": {
+    "start": "node --max-old-space-size=4096 index.js",
+    "dev": "nodemon --max-old-space-size=4096 index.js"
+  },
+  "keywords": ["puppeteer", "playwright", "recorder", "video", "browser"],
+  "author": "",
+  "license": "ISC",
+  "description": "Service for recording website interactions and animations using headless browsers",
+  "dependencies": {
+    "cors": "^2.8.5",
+    "express": "^4.18.2",
+    "playwright": "^1.42.1",
+    "uuid": "^9.0.0"
+  },
+  "devDependencies": {
+    "nodemon": "^3.0.1"
+  },
+  "engines": {
+    "node": ">=16.0.0"
+  }
+}
