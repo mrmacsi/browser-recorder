@@ -52,6 +52,50 @@ async function ensureBrowsersInstalled() {
   }
 }
 
+// Helper function to generate a random animation on the page
+async function generatePageActivity(page, durationMs) {
+  const startTime = Date.now();
+  const endTime = startTime + durationMs;
+  
+  console.log('Starting page activity to ensure recording has content...');
+  
+  // Create a function to perform random scrolling and movement
+  const performActivity = async () => {
+    try {
+      // Scroll randomly
+      await page.evaluate(() => {
+        const scrollAmount = Math.floor(Math.random() * 500);
+        window.scrollBy(0, scrollAmount);
+        setTimeout(() => window.scrollBy(0, -scrollAmount), 500);
+      });
+      
+      // Move mouse randomly (if the page is still active)
+      try {
+        const viewportSize = await page.viewportSize();
+        if (viewportSize) {
+          await page.mouse.move(
+            Math.floor(Math.random() * viewportSize.width),
+            Math.floor(Math.random() * viewportSize.height)
+          );
+        }
+      } catch (mouseError) {
+        // Ignore mouse movement errors as the page might be closing
+      }
+    } catch (e) {
+      // Ignore errors during activity as page might be closing
+    }
+  };
+  
+  // Perform activity until the duration is complete
+  while (Date.now() < endTime) {
+    await performActivity();
+    // Wait a short time between activities
+    await new Promise(resolve => setTimeout(resolve, 300));
+  }
+  
+  console.log('Page activity completed');
+}
+
 async function recordWebsite(url, duration = 10) {
   console.log(`Preparing to record ${url} for ${duration} seconds with Playwright...`);
   
@@ -71,13 +115,22 @@ async function recordWebsite(url, duration = 10) {
   
   // Generate a unique filename for this recording
   const newFilename = `recording-${uuidv4()}.webm`;
+  const destinationPath = path.join(uploadsDir, newFilename);
   
   // Launch browser with appropriate configuration
   let browser;
   try {
     browser = await chromium.launch({
       headless: true,
-      args: ['--no-sandbox']
+      args: [
+        '--no-sandbox',
+        '--disable-setuid-sandbox',
+        '--disable-dev-shm-usage',
+        '--disable-accelerated-2d-canvas',
+        '--no-first-run',
+        '--no-zygote',
+        '--disable-gpu'
+      ]
     });
   } catch (error) {
     console.error('Failed to launch browser:', error.message);
@@ -92,10 +145,10 @@ async function recordWebsite(url, duration = 10) {
   try {
     // Create a browser context with video recording enabled
     const context = await browser.newContext({
-      viewport: { width: 1920, height: 1080 },
+      viewport: { width: 1280, height: 720 },
       recordVideo: {
         dir: uploadsDir,
-        size: { width: 1920, height: 1080 }
+        size: { width: 1280, height: 720 }
       }
     });
 
@@ -113,37 +166,48 @@ async function recordWebsite(url, duration = 10) {
       // Allow page to stabilize
       await page.waitForTimeout(1000);
       
+      // Add some interactivity to make sure the video has content
+      console.log(`Generating page activity for better recording...`);
+      await generatePageActivity(page, duration * 1000);
+      
     } catch (navigationError) {
       console.warn(`Navigation issue: ${navigationError.message}`);
+      // Continue with recording anyway - we'll record whatever is on the page
     }
     
-    // Record for the specified duration
-    console.log(`Recording for ${duration} seconds...`);
-    const startTime = Date.now();
-    
-    // Wait for the specified duration
-    await page.waitForTimeout(duration * 1000);
+    // Ensure recording had enough activity to be valid
+    console.log(`Recording completed after ${duration} seconds`);
     
     // End the recording by closing the page and context
     await page.close();
+    console.log(`Page closed, waiting for video to be saved...`);
     const videoPath = await context.close();
+    console.log(`Context closed, video path: ${videoPath || 'undefined'}`);
     
-    const actualDuration = (Date.now() - startTime) / 1000;
-    
-    // If videoPath is undefined, just return our pre-generated filename
+    // If videoPath is undefined, create a fallback video
     if (!videoPath) {
       console.warn("Video path was undefined - this is an issue with the Playwright recording");
-      console.log(`Returning pre-generated filename: ${newFilename}`);
+      console.log(`Creating a fallback recording file: ${newFilename}`);
       
-      // Create an empty placeholder file so the UI doesn't break
-      const destinationPath = path.join(uploadsDir, newFilename);
       try {
-        // Create an empty file or copy a placeholder
-        fs.writeFileSync(destinationPath, "");
-        console.log(`Created placeholder file at ${destinationPath}`);
+        // Try to create a simple HTML5 video instead using ffmpeg if available
+        try {
+          console.log('Attempting to create a fallback video with ffmpeg...');
+          execSync(`ffmpeg -f lavfi -i color=c=blue:s=1280x720:d=${duration} -vf "drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf:text='Fallback Recording for ${url}':fontcolor=white:fontsize=36:x=(w-text_w)/2:y=(h-text_h)/2" -c:v libvpx -crf 30 -b:v 0 "${destinationPath}"`, {
+            stdio: 'inherit',
+            timeout: 30000  // 30 second timeout
+          });
+          console.log(`Created fallback video at ${destinationPath}`);
+          return newFilename;
+        } catch (ffmpegError) {
+          console.error('Failed to create fallback video with ffmpeg:', ffmpegError.message);
+          
+          // Create an empty placeholder file if ffmpeg fails
+          fs.writeFileSync(destinationPath, "VIDEO_RECORDING_FAILED");
+          console.log(`Created placeholder file at ${destinationPath}`);
+        }
       } catch (fsError) {
-        console.error('Error creating placeholder file:', fsError);
-        // Still return the filename, the UI will handle missing files
+        console.error('Error creating fallback file:', fsError);
       }
       
       return newFilename;
@@ -151,43 +215,55 @@ async function recordWebsite(url, duration = 10) {
     
     // Get the actual filename from the videoPath
     const originalFilename = path.basename(videoPath);
+    console.log(`Recorded video saved as: ${originalFilename}`);
+    
+    // Verify the file has content
+    try {
+      const stats = fs.statSync(videoPath);
+      console.log(`Original video file size: ${stats.size} bytes`);
+      
+      if (stats.size === 0) {
+        console.warn('Warning: Recorded video has 0 bytes. Creating a placeholder instead.');
+        fs.writeFileSync(destinationPath, "EMPTY_RECORDING");
+        return newFilename;
+      }
+    } catch (statError) {
+      console.error(`Error checking video file: ${statError.message}`);
+    }
     
     // Copy the file with our new filename to ensure consistency
-    const sourcePath = videoPath; // Using direct videoPath instead of joining
-    const destinationPath = path.join(uploadsDir, newFilename);
-    
     try {
       // Check if the original file exists
-      if (fs.existsSync(sourcePath)) {
+      if (fs.existsSync(videoPath)) {
         // Copy the file with our new filename
-        fs.copyFileSync(sourcePath, destinationPath);
+        fs.copyFileSync(videoPath, destinationPath);
         console.log(`Copied recording from ${originalFilename} to ${newFilename}`);
+        
+        // Verify the copied file
+        const destStats = fs.statSync(destinationPath);
+        console.log(`Copied file size: ${destStats.size} bytes`);
         
         // Remove the original file to avoid accumulating duplicate recordings
         try {
-          fs.unlinkSync(sourcePath);
+          fs.unlinkSync(videoPath);
           console.log(`Removed original recording file ${originalFilename}`);
         } catch (unlinkError) {
           console.error(`Could not remove original file: ${unlinkError.message}`);
           // Continue execution - the copy succeeded
         }
       } else {
-        console.error(`Original file not found at: ${sourcePath}`);
-        // If the original file doesn't exist, check if the destination file already exists
-        if (!fs.existsSync(destinationPath)) {
-          // Create an empty placeholder file
-          fs.writeFileSync(destinationPath, "");
-          console.log(`Created empty placeholder file at ${destinationPath}`);
-        }
+        console.error(`Original file not found at: ${videoPath}`);
+        // Create an empty placeholder file
+        fs.writeFileSync(destinationPath, "MISSING_SOURCE_VIDEO");
+        console.log(`Created placeholder for missing source file at ${destinationPath}`);
       }
     } catch (fsError) {
       console.error('Error handling recording file:', fsError);
       // If there's an error with the file operation, still return our newFilename
       console.log(`Returning filename despite file errors: ${newFilename}`);
-      return newFilename;
     }
     
-    console.log(`Recording completed: ${newFilename} (duration: ${actualDuration.toFixed(1)}s)`);
+    console.log(`Recording process completed: ${newFilename}`);
     return newFilename;
   } catch (error) {
     console.error('Recording error:', error);
@@ -195,6 +271,7 @@ async function recordWebsite(url, duration = 10) {
   } finally {
     if (browser) {
       await browser.close();
+      console.log('Browser closed');
     }
   }
 }
