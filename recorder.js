@@ -96,6 +96,63 @@ async function generatePageActivity(page, durationMs) {
   console.log('Page activity completed');
 }
 
+// Function to create a real fallback video using ffmpeg
+async function createFallbackVideo(destination, url, duration) {
+  try {
+    console.log('Attempting to create a fallback video with ffmpeg...');
+    // Escape single quotes in URL for command line
+    const safeUrl = url.replace(/'/g, "'\\''");
+    
+    // Use a simpler ffmpeg command that works on most systems
+    const command = `ffmpeg -f lavfi -i color=c=blue:s=1280x720:d=${duration} -c:v libvpx -crf 30 -b:v 800k "${destination}"`;
+    
+    execSync(command, {
+      stdio: 'inherit',
+      timeout: 30000  // 30 second timeout
+    });
+    
+    console.log(`Created fallback video at ${destination}`);
+    return true;
+  } catch (ffmpegError) {
+    console.error('Failed to create fallback video with ffmpeg:', ffmpegError.message);
+    return false;
+  }
+}
+
+// Find video files in the uploads directory that match our recording
+function findPlaywrightRecording(directory) {
+  try {
+    // Get all files in the directory
+    const files = fs.readdirSync(directory);
+    
+    // Find the most recent .webm file
+    const webmFiles = files
+      .filter(file => file.endsWith('.webm') && !file.startsWith('recording-'))
+      .map(file => {
+        const fullPath = path.join(directory, file);
+        const stats = fs.statSync(fullPath);
+        return {
+          filename: file,
+          path: fullPath,
+          created: stats.mtime.getTime(),
+          size: stats.size
+        };
+      })
+      .sort((a, b) => b.created - a.created); // Sort by most recent first
+    
+    if (webmFiles.length > 0) {
+      console.log(`Found ${webmFiles.length} webm files, using most recent: ${webmFiles[0].filename}`);
+      return webmFiles[0].path;
+    }
+    
+    console.log('No webm files found in uploads directory');
+    return null;
+  } catch (error) {
+    console.error('Error finding webm files:', error);
+    return null;
+  }
+}
+
 async function recordWebsite(url, duration = 10) {
   console.log(`Preparing to record ${url} for ${duration} seconds with Playwright...`);
   
@@ -143,6 +200,19 @@ async function recordWebsite(url, duration = 10) {
   }
 
   try {
+    // Clear any existing webm files in the uploads directory to avoid confusion
+    const existingFiles = fs.readdirSync(uploadsDir);
+    for (const file of existingFiles) {
+      if (file.endsWith('.webm') && !file.startsWith('recording-')) {
+        try {
+          fs.unlinkSync(path.join(uploadsDir, file));
+          console.log(`Removed existing webm file: ${file}`);
+        } catch (e) {
+          console.error(`Failed to remove existing webm file: ${file}`, e);
+        }
+      }
+    }
+    
     // Create a browser context with video recording enabled
     const context = await browser.newContext({
       viewport: { width: 1280, height: 720 },
@@ -184,42 +254,36 @@ async function recordWebsite(url, duration = 10) {
     const videoPath = await context.close();
     console.log(`Context closed, video path: ${videoPath || 'undefined'}`);
     
-    // If videoPath is undefined, create a fallback video
-    if (!videoPath) {
-      console.warn("Video path was undefined - this is an issue with the Playwright recording");
+    // Look for an actual video file in the uploads directory
+    const foundVideoPath = findPlaywrightRecording(uploadsDir);
+    
+    // Handle the case where videoPath is undefined
+    if (!videoPath && !foundVideoPath) {
+      console.warn("No video was produced by Playwright");
       console.log(`Creating a fallback recording file: ${newFilename}`);
       
-      try {
-        // Try to create a simple HTML5 video instead using ffmpeg if available
-        try {
-          console.log('Attempting to create a fallback video with ffmpeg...');
-          execSync(`ffmpeg -f lavfi -i color=c=blue:s=1280x720:d=${duration} -vf "drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf:text='Fallback Recording for ${url}':fontcolor=white:fontsize=36:x=(w-text_w)/2:y=(h-text_h)/2" -c:v libvpx -crf 30 -b:v 0 "${destinationPath}"`, {
-            stdio: 'inherit',
-            timeout: 30000  // 30 second timeout
-          });
-          console.log(`Created fallback video at ${destinationPath}`);
-          return newFilename;
-        } catch (ffmpegError) {
-          console.error('Failed to create fallback video with ffmpeg:', ffmpegError.message);
-          
-          // Create an empty placeholder file if ffmpeg fails
-          fs.writeFileSync(destinationPath, "VIDEO_RECORDING_FAILED");
-          console.log(`Created placeholder file at ${destinationPath}`);
-        }
-      } catch (fsError) {
-        console.error('Error creating fallback file:', fsError);
+      // Try to create a fallback video
+      const success = await createFallbackVideo(destinationPath, url, duration);
+      
+      if (!success) {
+        // Create an empty placeholder file if ffmpeg fails
+        fs.writeFileSync(destinationPath, "VIDEO_RECORDING_FAILED");
+        console.log(`Created placeholder file at ${destinationPath}`);
       }
       
       return newFilename;
     }
     
+    // Use the path we found if videoPath is undefined
+    const actualVideoPath = videoPath || foundVideoPath;
+    
     // Get the actual filename from the videoPath
-    const originalFilename = path.basename(videoPath);
+    const originalFilename = path.basename(actualVideoPath);
     console.log(`Recorded video saved as: ${originalFilename}`);
     
     // Verify the file has content
     try {
-      const stats = fs.statSync(videoPath);
+      const stats = fs.statSync(actualVideoPath);
       console.log(`Original video file size: ${stats.size} bytes`);
       
       if (stats.size === 0) {
@@ -234,9 +298,9 @@ async function recordWebsite(url, duration = 10) {
     // Copy the file with our new filename to ensure consistency
     try {
       // Check if the original file exists
-      if (fs.existsSync(videoPath)) {
+      if (fs.existsSync(actualVideoPath)) {
         // Copy the file with our new filename
-        fs.copyFileSync(videoPath, destinationPath);
+        fs.copyFileSync(actualVideoPath, destinationPath);
         console.log(`Copied recording from ${originalFilename} to ${newFilename}`);
         
         // Verify the copied file
@@ -245,14 +309,14 @@ async function recordWebsite(url, duration = 10) {
         
         // Remove the original file to avoid accumulating duplicate recordings
         try {
-          fs.unlinkSync(videoPath);
+          fs.unlinkSync(actualVideoPath);
           console.log(`Removed original recording file ${originalFilename}`);
         } catch (unlinkError) {
           console.error(`Could not remove original file: ${unlinkError.message}`);
           // Continue execution - the copy succeeded
         }
       } else {
-        console.error(`Original file not found at: ${videoPath}`);
+        console.error(`Original file not found at: ${actualVideoPath}`);
         // Create an empty placeholder file
         fs.writeFileSync(destinationPath, "MISSING_SOURCE_VIDEO");
         console.log(`Created placeholder for missing source file at ${destinationPath}`);
