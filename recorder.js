@@ -96,29 +96,6 @@ async function generatePageActivity(page, durationMs) {
   console.log('Page activity completed');
 }
 
-// Function to create a real fallback video using ffmpeg
-async function createFallbackVideo(destination, url, duration) {
-  try {
-    console.log('Attempting to create a fallback video with ffmpeg...');
-    // Escape single quotes in URL for command line
-    const safeUrl = url.replace(/'/g, "'\\''");
-    
-    // Use a simpler ffmpeg command that works on most systems
-    const command = `ffmpeg -f lavfi -i color=c=blue:s=1280x720:d=${duration} -c:v libvpx -crf 30 -b:v 800k "${destination}"`;
-    
-    execSync(command, {
-      stdio: 'inherit',
-      timeout: 30000  // 30 second timeout
-    });
-    
-    console.log(`Created fallback video at ${destination}`);
-    return true;
-  } catch (ffmpegError) {
-    console.error('Failed to create fallback video with ffmpeg:', ffmpegError.message);
-    return false;
-  }
-}
-
 // Find video files in the uploads directory that match our recording
 function findPlaywrightRecording(directory) {
   try {
@@ -170,9 +147,9 @@ async function recordWebsite(url, duration = 10) {
   // Ensure browsers are installed before proceeding
   await ensureBrowsersInstalled();
   
-  // Fallback filename in case we need to create one
-  const fallbackFilename = `fallback-${uuidv4()}.webm`;
-  const fallbackPath = path.join(uploadsDir, fallbackFilename);
+  // Generate blank file name if needed
+  const blankFilename = `blank-${uuidv4()}.webm`;
+  const blankPath = path.join(uploadsDir, blankFilename);
   
   // Launch browser with appropriate configuration
   let browser;
@@ -247,18 +224,12 @@ async function recordWebsite(url, duration = 10) {
     // Handle the case where no video was found
     if (!foundVideoFile) {
       console.warn("No video was produced by Playwright");
-      console.log(`Creating a fallback file: ${fallbackFilename}`);
       
-      // Try to create a fallback video
-      const success = await createFallbackVideo(fallbackPath, url, duration);
+      // Create a blank file as a placeholder
+      fs.writeFileSync(blankPath, "NO_VIDEO_RECORDED");
+      console.log(`Created blank file at ${blankPath}`);
       
-      if (!success) {
-        // Create an empty placeholder file if ffmpeg fails
-        fs.writeFileSync(fallbackPath, "VIDEO_RECORDING_FAILED");
-        console.log(`Created placeholder file at ${fallbackPath}`);
-      }
-      
-      return fallbackFilename;
+      return blankFilename;
     }
     
     console.log(`Using video file: ${foundVideoFile.filename} (${foundVideoFile.size} bytes)`);
