@@ -288,6 +288,24 @@ async function recordWebsite(url, duration = 10) {
       
       if (stats.size === 0) {
         console.warn('Warning: Recorded video has 0 bytes. Creating a placeholder instead.');
+        
+        // Even if the original video is 0 bytes, we might have another valid webm file to use
+        const alternateVideoPath = findPlaywrightRecording(uploadsDir);
+        if (alternateVideoPath && alternateVideoPath !== actualVideoPath) {
+          console.log(`Found alternative video file: ${alternateVideoPath}`);
+          const altStats = fs.statSync(alternateVideoPath);
+          
+          if (altStats.size > 0) {
+            console.log(`Using alternative video file with size: ${altStats.size} bytes`);
+            fs.copyFileSync(alternateVideoPath, destinationPath);
+            console.log(`Copied recording from ${path.basename(alternateVideoPath)} to ${newFilename}`);
+            
+            // Return the new filename after successful copy
+            return newFilename;
+          }
+        }
+        
+        // If we couldn't find an alternative, create a placeholder
         fs.writeFileSync(destinationPath, "EMPTY_RECORDING");
         return newFilename;
       }
@@ -306,6 +324,20 @@ async function recordWebsite(url, duration = 10) {
         // Verify the copied file
         const destStats = fs.statSync(destinationPath);
         console.log(`Copied file size: ${destStats.size} bytes`);
+        
+        // If the copied file has 0 bytes but original had content, something went wrong with the copy
+        if (destStats.size === 0) {
+          console.warn('Warning: Copied file has 0 bytes but original had content. Trying different copy method.');
+          
+          // Try a different copy method using a buffer
+          try {
+            const fileBuffer = fs.readFileSync(actualVideoPath);
+            fs.writeFileSync(destinationPath, fileBuffer);
+            console.log(`Copied file using buffer method, new size: ${fs.statSync(destinationPath).size} bytes`);
+          } catch (bufferCopyError) {
+            console.error(`Buffer copy method failed: ${bufferCopyError.message}`);
+          }
+        }
         
         // Remove the original file to avoid accumulating duplicate recordings
         try {
