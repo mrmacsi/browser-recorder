@@ -26,7 +26,6 @@ console.log(`System has ${numCPUs} CPU cores and ${Math.round(totalMemory / 1024
 
 // Configure video optimization based on system resources
 const VIDEO_FPS = 20; // Reduced for better server performance with smoother result
-const ACTIVITY_DELAY = 100; // Further reduced for smoother activity
 const VIDEO_WIDTH = 1280;
 const VIDEO_HEIGHT = 720;
 const VIDEO_SCALE = 0.75; // Scale down to 75% for better performance
@@ -61,68 +60,6 @@ async function ensureBrowsersInstalled() {
     }
     throw error;
   }
-}
-
-// Helper function to generate a random animation on the page
-async function generatePageActivity(page, durationMs) {
-  const startTime = Date.now();
-  const endTime = startTime + durationMs;
-  
-  console.log('Starting page activity to ensure recording has content...');
-  
-  // Create a function to perform random scrolling and movement
-  const performActivity = async () => {
-    try {
-      // Use smoother animation with requestAnimationFrame
-      await page.evaluate(() => {
-        return new Promise(resolve => {
-          const scrollAmount = Math.floor(Math.random() * 300); // Reduced range for smoother scrolling
-          
-          // Use smooth scroll for better animation
-          window.scrollBy({
-            top: scrollAmount,
-            behavior: 'smooth'
-          });
-          
-          // Use requestAnimationFrame for smoother animation
-          requestAnimationFrame(() => {
-            setTimeout(() => {
-              window.scrollBy({
-                top: -scrollAmount,
-                behavior: 'smooth'
-              });
-              resolve();
-            }, 200); // Reduced from 300ms for smoother motion
-          });
-        });
-      });
-      
-      // Smoother mouse movement
-      try {
-        const viewportSize = await page.viewportSize();
-        if (viewportSize) {
-          await page.mouse.move(
-            Math.floor(Math.random() * viewportSize.width),
-            Math.floor(Math.random() * viewportSize.height),
-            { steps: 10 } // Use more steps for smoother animation
-          );
-        }
-      } catch (mouseError) {
-        // Ignore mouse movement errors as the page might be closing
-      }
-    } catch (e) {
-      // Ignore errors during activity as page might be closing
-    }
-  };
-  
-  // Perform activity until the duration is complete
-  while (Date.now() < endTime) {
-    await performActivity();
-    // Wait a short time between activities
-    await new Promise(resolve => setTimeout(resolve, ACTIVITY_DELAY));
-  }
-  
-  console.log('Page activity completed');
 }
 
 // Find video files in the uploads directory that match our recording
@@ -320,18 +257,33 @@ async function recordWebsite(url, duration = 10) {
         timeout: 30000 
       });
       
-      // Let the page stabilize first with reduced initial activity
+      // Let the page stabilize first
       await page.waitForTimeout(500);
       
-      // Set animation frame rate to match our recording FPS
-      await page.evaluate((targetFps) => {
-        window.__animationFrameInterval = 1000 / targetFps;
-        console.log(`Setting animation frame interval to ${window.__animationFrameInterval}ms`);
-      }, VIDEO_FPS);
+      // Perform a single scroll down and back up to trigger lazy loading content
+      console.log('Performing initial scroll to ensure content is loaded...');
+      await page.evaluate(() => {
+        // Scroll down smoothly to load any lazy content
+        window.scrollTo({
+          top: document.body.scrollHeight,
+          behavior: 'smooth'
+        });
+        
+        // After a brief pause, scroll back to top
+        setTimeout(() => {
+          window.scrollTo({
+            top: 0,
+            behavior: 'smooth'
+          });
+        }, 1000);
+      });
       
-      // Add some interactivity to make sure the video has content
-      console.log(`Generating page activity for better recording...`);
-      await generatePageActivity(page, duration * 1000);
+      // Wait for scroll to complete and page to stabilize
+      await page.waitForTimeout(2000);
+      
+      // Record the page statically for the specified duration
+      console.log(`Recording page statically for ${duration} seconds...`);
+      await page.waitForTimeout(duration * 1000);
       
     } catch (navigationError) {
       console.warn(`Navigation issue: ${navigationError.message}`);
