@@ -11,17 +11,8 @@ UBUNTU_VERSION=$(lsb_release -r -s)
 
 echo "Installing on $DISTRO $UBUNTU_VERSION"
 
-# Create directory if needed
-REPO_DIR="browser-recorder"
-if [ ! -d "$REPO_DIR" ]; then
-  # Clone repository (replace with your actual repo URL)
-  git clone https://github.com/mrmacsi/browser-recorder.git $REPO_DIR
-  cd $REPO_DIR
-else
-  # Update existing repository
-  cd $REPO_DIR
-  git pull
-fi
+# Repository directory is expected to be already cloned by the VM creation script
+REPO_DIR="."
 
 # Install Node.js dependencies if not already installed
 if ! command -v node &> /dev/null; then
