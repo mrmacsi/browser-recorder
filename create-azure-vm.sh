@@ -10,61 +10,81 @@ fi
 az account show &> /dev/null || az login
 
 # Configuration variables - customize these as needed
-RESOURCE_GROUP="browser-recorder-vm-rg"
-VM_NAME="browser-recorder-vm"
+RESOURCE_GROUP="browser-recorder-rg"
+VM_NAME="browserrecordervm"
 LOCATION="westeurope"
 VM_SIZE="Standard_B1s"  # 1 vCPU and 1 GiB RAM (tested and working)
 IMAGE="Canonical:0001-com-ubuntu-server-focal:20_04-lts:latest"  # Ubuntu 20.04 LTS
-REPO_URL="https://github.com/macitsimsek12/sector-analytics-hub.git"  # Change to your Git repository URL
+REPO_URL="https://github.com/mrmacsi/browser-recorder.git"  # Change to your Git repository URL
 
 # Create resource group if it doesn't exist
-if ! az group show --name "$RESOURCE_GROUP" &> /dev/null; then
-    echo "Creating resource group $RESOURCE_GROUP in $LOCATION..."
-    az group create --name "$RESOURCE_GROUP" --location "$LOCATION" --output none
-    if [ $? -ne 0 ]; then
-        echo "Failed to create resource group. Exiting."
-        exit 1
-    fi
-    echo "Resource group $RESOURCE_GROUP created."
-else
-    echo "Resource group $RESOURCE_GROUP already exists."
+echo "Creating resource group $RESOURCE_GROUP in $LOCATION..."
+az group create --name "$RESOURCE_GROUP" --location "$LOCATION"
+if [ $? -ne 0 ]; then
+    echo "Failed to create resource group. Exiting."
+    exit 1
 fi
 
 # Create the VM with specified size and Ubuntu image
 echo "Creating VM $VM_NAME..."
-VM_CREATION=$(az vm create \
+az vm create \
     --resource-group "$RESOURCE_GROUP" \
     --name "$VM_NAME" \
     --size "$VM_SIZE" \
     --image "$IMAGE" \
-    --generate-ssh-keys \
-    --public-ip-sku Standard 2>/dev/null)
+    --admin-username azureuser \
+    --generate-ssh-keys
 
 if [ $? -ne 0 ]; then
     echo "Failed to create VM. Exiting."
     exit 1
 fi
 
-PUBLIC_IP=$(echo $VM_CREATION | jq -r .publicIpAddress)
+# Get the public IP address
+PUBLIC_IP=$(az vm show -d -g "$RESOURCE_GROUP" -n "$VM_NAME" --query publicIps -o tsv)
 echo "VM $VM_NAME created with public IP: $PUBLIC_IP"
 
 # Wait for the VM to be fully provisioned
 echo "Waiting for VM to be ready..."
 sleep 30
 
-# Run commands on the VM to install Node.js, Git, and pull code from the repository
-echo "Installing software and pulling code from $REPO_URL..."
+# First step: Install required packages
+echo "Installing required packages..."
 az vm run-command invoke \
     --resource-group "$RESOURCE_GROUP" \
     --name "$VM_NAME" \
     --command-id RunShellScript \
-    --scripts "sudo apt-get update && sudo apt-get install git nodejs npm -y && git clone $REPO_URL /home/azureuser/project && cd /home/azureuser/project && chmod +x install.sh && ./install.sh && npm install"
+    --scripts "sudo apt-get update && sudo apt-get install git nodejs npm -y"
 
 if [ $? -ne 0 ]; then
-    echo "Failed to run setup commands on VM. The VM was created but setup failed."
+    echo "Failed to install packages on VM."
     echo "You can SSH into the VM using: ssh azureuser@$PUBLIC_IP and complete setup manually."
     exit 1
 fi
+
+# Second step: Clone the repository
+echo "Cloning repository $REPO_URL..."
+CLONE_RESULT=$(az vm run-command invoke \
+    --resource-group "$RESOURCE_GROUP" \
+    --name "$VM_NAME" \
+    --command-id RunShellScript \
+    --scripts "git clone $REPO_URL /home/azureuser/project || echo 'Git clone failed'")
+
+# Check if repository cloning was successful
+if echo "$CLONE_RESULT" | grep -q "Git clone failed"; then
+    echo "Failed to clone the repository. The repository might be private or inaccessible."
+    echo "You can SSH into the VM using: ssh azureuser@$PUBLIC_IP and clone the repository manually."
+    echo "VM creation was successful, but repository setup failed."
+    exit 1
+fi
+
+# Final step: Run setup commands if everything is successful
+echo "Running setup commands..."
+az vm run-command invoke \
+    --resource-group "$RESOURCE_GROUP" \
+    --name "$VM_NAME" \
+    --command-id RunShellScript \
+    --scripts "cd /home/azureuser/project && if [ -f install.sh ]; then chmod +x install.sh && ./install.sh; fi && npm install"
 
 echo "Setup complete. You can SSH into the VM using: ssh azureuser@$PUBLIC_IP"
 echo "Your application is now running on VM: $VM_NAME" 
