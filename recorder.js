@@ -25,8 +25,10 @@ const totalMemory = os.totalmem();
 console.log(`System has ${numCPUs} CPU cores and ${Math.round(totalMemory / 1024 / 1024 / 1024)}GB total memory`);
 
 // Configure video optimization based on system resources
-const VIDEO_FPS = 30; // Higher FPS for smoother recording
-const ACTIVITY_DELAY = 200; // Reduced from 300ms for smoother activity
+const VIDEO_FPS = 24; // Optimal FPS for smooth playback while reducing CPU load
+const ACTIVITY_DELAY = 150; // Further reduced for smoother activity
+const VIDEO_WIDTH = 1280;
+const VIDEO_HEIGHT = 720;
 
 // Function to check if browsers are installed
 async function ensureBrowsersInstalled() {
@@ -160,6 +162,8 @@ async function recordWebsite(url, duration = 10) {
   try {
     browser = await chromium.launch({
       headless: true,
+      executablePath: process.env.CHROME_PATH, // Use system Chrome if available
+      chromiumSandbox: false, // Disable sandbox for better performance
       args: [
         '--no-sandbox',
         '--disable-setuid-sandbox',
@@ -173,7 +177,21 @@ async function recordWebsite(url, duration = 10) {
         '--js-flags=--max-old-space-size=4096',
         `--renderer-process-limit=${Math.max(4, numCPUs)}`,
         '--disable-web-security',
-        '--autoplay-policy=no-user-gesture-required'
+        '--autoplay-policy=no-user-gesture-required',
+        '--disable-extensions',
+        '--disable-background-networking',
+        '--disable-background-timer-throttling',
+        '--disable-backgrounding-occluded-windows',
+        '--disable-breakpad',
+        '--disable-component-extensions-with-background-pages',
+        '--disable-features=TranslateUI,BlinkGenPropertyTrees',
+        '--disable-ipc-flooding-protection',
+        '--disable-renderer-backgrounding',
+        '--mute-audio',
+        '--disable-sync',
+        `--use-gl=swiftshader`,
+        '--disable-speech-api',
+        `--memory-pressure-off`
       ]
     });
   } catch (error) {
@@ -189,17 +207,24 @@ async function recordWebsite(url, duration = 10) {
   try {
     // Create a browser context with video recording enabled with improved settings
     const context = await browser.newContext({
-      viewport: { width: 1280, height: 720 },
+      viewport: { width: VIDEO_WIDTH, height: VIDEO_HEIGHT },
       recordVideo: {
         dir: uploadsDir,
-        size: { width: 1280, height: 720 },
-        fps: VIDEO_FPS // Set higher FPS for smoother recording
+        size: { width: VIDEO_WIDTH, height: VIDEO_HEIGHT },
+        fps: VIDEO_FPS
       },
-      ignoreHTTPSErrors: true, // Ignore HTTPS errors for better performance
+      ignoreHTTPSErrors: true,
+      bypassCSP: true, // Bypass Content-Security-Policy for better performance
+      deviceScaleFactor: 1.0, // Use exact 1.0 scale factor for better performance
+      hasTouch: false, // Disable touch for better performance
+      isMobile: false, // Disable mobile emulation
+      javaScriptEnabled: true,
+      userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/96.0.4664.110 Safari/537.36', // Use a standard UA
     });
 
-    // Set default timeout to improve performance
-    context.setDefaultTimeout(30000); // 30 seconds is usually sufficient
+    // Optimize context performance
+    context.setDefaultNavigationTimeout(30000);
+    context.setDefaultTimeout(20000);
     
     // Create a new page
     const page = await context.newPage();
