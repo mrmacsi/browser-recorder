@@ -15,9 +15,6 @@ build/
 .env.test
 .env.production
 
-# Video recordings
-uploads/
-
 # OS files
 .DS_Store
 Thumbs.db
