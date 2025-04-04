@@ -39,3 +39,7 @@ lerna-debug.log*
 
 # Testing
 /coverage 
+
+# Uploads directory - ignore all files except .gitkeep
+uploads/*
+!uploads/.gitkeep 
