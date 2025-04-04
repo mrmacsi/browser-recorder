@@ -3,6 +3,7 @@ const path = require('path');
 const { v4: uuidv4 } = require('uuid');
 const fs = require('fs');
 const os = require('os');
+const { execSync } = require('child_process');
 
 // Ensure uploads directory exists
 const uploadsDir = path.join(__dirname, 'uploads');
@@ -15,14 +16,56 @@ const numCPUs = os.cpus().length;
 const totalMemory = os.totalmem();
 console.log(`System has ${numCPUs} CPU cores and ${Math.round(totalMemory / 1024 / 1024 / 1024)}GB total memory`);
 
+// Function to check if browsers are installed
+async function ensureBrowsersInstalled() {
+  try {
+    // Try a simple browser launch to check if browsers are installed
+    const browser = await chromium.launch({ headless: true });
+    await browser.close();
+    return true;
+  } catch (error) {
+    if (error.message && error.message.includes("Executable doesn't exist")) {
+      console.error('Playwright browsers are not installed. Attempting to install them now...');
+      
+      try {
+        // Try to automatically install browsers
+        console.log('Running: npx playwright install chromium');
+        execSync('npx playwright install chromium', { stdio: 'inherit' });
+        console.log('Chromium installed successfully');
+        return true;
+      } catch (installError) {
+        console.error('Failed to automatically install browsers');
+        console.error('Please run the following command manually:');
+        console.error('npx playwright install');
+        throw new Error('Browser installation required. Run: npx playwright install');
+      }
+    }
+    throw error;
+  }
+}
+
 async function recordWebsite(url, duration = 10) {
   console.log(`Preparing to record ${url} for ${duration} seconds with Playwright...`);
   
+  // Ensure browsers are installed before proceeding
+  await ensureBrowsersInstalled();
+  
   // Launch browser with appropriate configuration
-  const browser = await chromium.launch({
-    headless: true,
-    args: ['--no-sandbox']
-  });
+  let browser;
+  try {
+    browser = await chromium.launch({
+      headless: true,
+      args: ['--no-sandbox']
+    });
+  } catch (error) {
+    console.error('Failed to launch browser:', error.message);
+    if (error.message.includes("Executable doesn't exist")) {
+      throw new Error(
+        "Playwright browser not found. Please run 'npx playwright install' to download the required browsers."
+      );
+    }
+    throw error;
+  }
 
   try {
     // Create a browser context with video recording enabled
@@ -63,17 +106,19 @@ async function recordWebsite(url, duration = 10) {
     await page.close();
     const videoPath = await context.close();
     
-    // Generate a unique filename for the recording
-    const outputFilename = `recording-${uuidv4()}.webm`;
+    // Get the actual filename from the videoPath (fix for filename mismatch issue)
+    const actualFilename = path.basename(videoPath);
     const actualDuration = (Date.now() - startTime) / 1000;
     
-    console.log(`Recording completed: ${outputFilename} (duration: ${actualDuration.toFixed(1)}s)`);
-    return outputFilename;
+    console.log(`Recording completed: ${actualFilename} (duration: ${actualDuration.toFixed(1)}s)`);
+    return actualFilename;
   } catch (error) {
     console.error('Recording error:', error);
     throw error;
   } finally {
-    await browser.close();
+    if (browser) {
+      await browser.close();
+    }
   }
 }
 
