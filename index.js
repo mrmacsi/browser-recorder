@@ -311,6 +311,30 @@ app.get('/api/logs/:filename', (req, res) => {
   }
 });
 
+// Route to toggle hardware acceleration
+app.post('/api/toggle-hardware-acceleration', async (req, res) => {
+  try {
+    const enableHardware = req.body.enable === true;
+    // Set the environment variable for the current process
+    process.env.HARDWARE_ACCELERATION = enableHardware ? 'true' : 'false';
+    
+    console.log(`Setting hardware acceleration to: ${enableHardware ? 'enabled' : 'disabled'}`);
+    
+    // Return result
+    res.json({
+      success: true,
+      hardwareAcceleration: enableHardware,
+      message: `Hardware acceleration ${enableHardware ? 'enabled' : 'disabled'}`
+    });
+  } catch (error) {
+    console.error(`Error toggling hardware acceleration: ${error.message}`);
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+});
+
 // Create server based on environment
 let server;
 
@@ -367,5 +391,5 @@ process.on('SIGTERM', () => {
 process.on('SIGINT', () => {
   console.log('SIGINT received, shutting down gracefully');
   server.close(() => console.log('Server closed'));
-  process.exit(0);
+  process.exit(0); 
 }); 
