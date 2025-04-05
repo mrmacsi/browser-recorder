@@ -264,9 +264,14 @@ async function recordWebsite(url, duration = 10) {
       // Reduced stabilization time
       await page.waitForTimeout(500); // Reduced from 1000ms
       
-      // Add some interactivity to make sure the video has content
-      console.log(`Generating page activity for better recording...`);
-      await generatePageActivity(page, duration * 1000);
+      // Add some initial interactivity to make sure the video has content
+      console.log(`Generating initial page activity...`);
+      // Only generate activity for 2 seconds at the beginning instead of full duration
+      await generatePageActivity(page, 2000);
+      
+      // Wait for the remainder of the recording time
+      console.log(`Waiting for the remaining recording time...`);
+      await page.waitForTimeout((duration * 1000) - 2000);
       
     } catch (navigationError) {
       console.warn(`Navigation issue: ${navigationError.message}`);
