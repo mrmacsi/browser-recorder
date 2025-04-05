@@ -55,56 +55,43 @@ app.use('/uploads', (req, res, next) => {
 
 // API endpoint for recording a website
 app.post('/api/record', async (req, res) => {
-  const url = req.body.url || 'https://example.com';
-  const duration = Math.min(Math.max(parseInt(req.body.duration || 10), 1), 60);
+  let videoName = null;
   
   try {
-    console.log(`Recording request received for ${url} (${duration}s)`);
+    // Ensure required parameters
+    const { url, duration } = req.body;
     
-    // Ensure uploads directory exists before proceeding
-    if (!fs.existsSync(uploadsDir)) {
-      console.log(`Creating uploads directory: ${uploadsDir}`);
-      fs.mkdirSync(uploadsDir, { recursive: true });
+    if (!url) {
+      return res.status(400).json({ success: false, error: 'URL is required' });
     }
     
-    // Get the initial files in uploads directory
-    const initialFiles = fs.readdirSync(uploadsDir)
-      .filter(file => file.endsWith('.webm'))
-      .map(file => ({
-        name: file,
-        path: path.join(uploadsDir, file),
-        time: fs.statSync(path.join(uploadsDir, file)).mtime.getTime(),
-        size: fs.statSync(path.join(uploadsDir, file)).size
-      }));
+    // Check for hardware acceleration flag
+    if (req.body.hardware_acceleration !== undefined) {
+      const enableHardware = req.body.hardware_acceleration === true;
+      process.env.HARDWARE_ACCELERATION = enableHardware ? 'true' : 'false';
+      console.log(`Setting hardware acceleration to: ${enableHardware ? 'enabled' : 'disabled'} for this recording`);
+    }
     
-    // Remove tiny blank files that may exist from previous recordings
-    initialFiles.forEach(file => {
-      if (file.name.startsWith('blank-') && file.size < 1000) {
-        try {
-          console.log(`Removing blank placeholder file: ${file.name}`);
-          fs.unlinkSync(file.path);
-        } catch (err) {
-          console.error(`Error removing blank file: ${err.message}`);
-        }
-      }
-    });
+    console.log(`Recording requested for URL: ${url}, duration: ${duration || 10}s`);
     
-    // Record the website - this will create a new file in uploads directory
-    const recordingResult = await recordWebsite(url, duration);
+    // Call the recorder with the URL and optional duration
+    const result = await recorder.recordWebsite(url, duration || 10);
     
-    // Check if there was an error during recording
-    if (recordingResult.error) {
-      return res.status(500).json({
-        success: false,
-        error: 'Recording failed',
-        message: recordingResult.error,
-        logFile: recordingResult.logFile
+    if (result.error) {
+      return res.status(500).json({ 
+        success: false, 
+        error: result.error,
+        logFile: result.logFile,
+        logUrl: `/api/logs/${result.logFile}`
       });
     }
     
+    const fileName = result.fileName;
+    videoName = fileName;
+    
     // Get the filename from the result
-    const resultFilename = recordingResult.fileName;
-    const logFilename = recordingResult.logFile;
+    const resultFilename = fileName;
+    const logFilename = result.logFile;
     
     // Check if we have a valid filename
     if (!resultFilename) {
