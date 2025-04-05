@@ -18,6 +18,13 @@ if (!fs.existsSync(metricsDir)) {
   console.log(`[DEBUG] Created metrics directory: ${metricsDir}`);
 }
 
+// Also create a backup metrics directory in a location that should always be writable
+const backupMetricsDir = path.join(os.tmpdir(), 'browser-recorder-metrics');
+if (!fs.existsSync(backupMetricsDir)) {
+  fs.mkdirSync(backupMetricsDir, { recursive: true });
+  console.log(`[DEBUG] Created backup metrics directory: ${backupMetricsDir}`);
+}
+
 // Verify metrics directory permissions
 try {
   console.log(`[DEBUG] Metrics directory permissions:`);
@@ -33,9 +40,11 @@ function createSessionLogger(sessionId) {
   const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
   const logFilePath = path.join(logsDir, `recording-${sessionId}-${timestamp}.log`);
   const metricsFilePath = path.join(metricsDir, `metrics-${sessionId}-${timestamp}.log`);
+  const backupMetricsFilePath = path.join(backupMetricsDir, `metrics-${sessionId}-${timestamp}.log`);
   
   console.log(`[DEBUG] Creating log file: ${logFilePath}`);
   console.log(`[DEBUG] Creating metrics file: ${metricsFilePath}`);
+  console.log(`[DEBUG] Creating backup metrics file: ${backupMetricsFilePath}`);
   
   // First check permissions on directories
   try {
@@ -98,10 +107,18 @@ function createSessionLogger(sessionId) {
     console.log(`[DEBUG] Metrics stream created: ${!!metricsStream}`);
   } catch (metricsStreamError) {
     console.log(`[DEBUG] Failed to create metrics stream: ${metricsStreamError.message}`);
-    // Create fallback metrics stream to tempdir
-    const tempMetricsPath = path.join(os.tmpdir(), `metrics-${sessionId}-${timestamp}.log`);
-    console.log(`[DEBUG] Using fallback metrics path: ${tempMetricsPath}`);
-    metricsStream = fs.createWriteStream(tempMetricsPath, { flags: 'a' });
+    // Create fallback metrics stream in backup directory
+    console.log(`[DEBUG] Using backup metrics path: ${backupMetricsFilePath}`);
+    try {
+      metricsStream = fs.createWriteStream(backupMetricsFilePath, { flags: 'a' });
+      console.log(`[DEBUG] Backup metrics stream created: ${!!metricsStream}`);
+    } catch (backupError) {
+      console.log(`[DEBUG] Failed to create backup metrics stream: ${backupError.message}`);
+      // Last resort fallback to tempdir
+      const tempMetricsPath = path.join(os.tmpdir(), `metrics-${sessionId}-${timestamp}.log`);
+      console.log(`[DEBUG] Using tempdir metrics path: ${tempMetricsPath}`);
+      metricsStream = fs.createWriteStream(tempMetricsPath, { flags: 'a' });
+    }
   }
   
   // Write initial test entries to verify streams work
@@ -133,20 +150,17 @@ function createSessionLogger(sessionId) {
   };
   
   // Create a metrics logger specifically for performance data
+  // We also write metrics to the regular log for redundancy
   const metricsLogger = (message) => {
     const timestampedMessage = `[${new Date().toISOString()}] ${message}`;
     console.log(`METRICS: ${timestampedMessage}`);
     try {
+      // Also log metrics to regular log for redundancy
+      logStream.write(`METRICS: ${timestampedMessage}\n`);
+      
+      // Try to write to metrics stream
       metricsStream.write(timestampedMessage + '\n');
       console.log(`[DEBUG] Successfully wrote metrics: ${message.substring(0, 50)}...`);
-      
-      // Verify file exists after write
-      if (fs.existsSync(metricsFilePath)) {
-        console.log(`[DEBUG] Metrics file exists after write: ${metricsFilePath}`);
-        console.log(`[DEBUG] Metrics file size: ${fs.statSync(metricsFilePath).size} bytes`);
-      } else {
-        console.log(`[DEBUG] Metrics file does not exist after write!`);
-      }
     } catch (err) {
       console.error(`[DEBUG] Failed to write to metrics file: ${err.message}`);
     }
@@ -362,10 +376,14 @@ async function generatePageActivity(page, durationMs, logMetrics, log) {
   const minFrameTime = frameTimes.length > 0 ? Math.min(...frameTimes) : 0;
   const maxFrameTime = frameTimes.length > 0 ? Math.max(...frameTimes) : 0;
   
+  // Log to regular log regardless of metrics logger availability
   log(`Page activity completed with ${activityCount} mouse movements`);
   log(`Frame statistics: ${fps} FPS, Avg: ${avgFrameTime.toFixed(2)}ms, Min: ${minFrameTime}ms, Max: ${maxFrameTime}ms`);
+  log(`FRAME_METRICS,${fps},${avgFrameTime.toFixed(2)},${minFrameTime},${maxFrameTime},${activityCount}`);
+  log(`FRAME_STATS,FPS=${fps},AVG_TIME=${avgFrameTime.toFixed(2)}ms,MIN=${minFrameTime}ms,MAX=${maxFrameTime}ms`);
+  log(`ACTIVITY_COUNT=${activityCount},DURATION=${totalDuration}ms,TARGET_FPS=${TARGET_FPS}`);
   
-  // Log metrics to the dedicated metrics file
+  // Log metrics to the dedicated metrics file if available
   if (logMetrics) {
     log(`Writing frame metrics to metrics file: FPS=${fps}`);
     logMetrics(`FRAME_METRICS,${fps},${avgFrameTime.toFixed(2)},${minFrameTime},${maxFrameTime},${activityCount}`);
