@@ -220,6 +220,64 @@ function findPlaywrightRecording(directory) {
   }
 }
 
+// Utility function to check if a file is valid for ffmpeg processing
+function isValidForFfmpeg(file) {
+  if (!file) {
+    console.log(`[DEBUG] No file provided, skipping ffmpeg`);
+    return false;
+  }
+
+  // Explicitly check for blank files by name pattern
+  if (file.filename && file.filename.startsWith('blank-')) {
+    console.log(`[DEBUG] File '${file.filename}' is a placeholder file (starts with 'blank-'), skipping ffmpeg`);
+    return false;
+  }
+
+  // Check file size
+  if (!file.size || file.size < 10000) {
+    console.log(`[DEBUG] File size (${file?.size || 0} bytes) is too small for ffmpeg, minimum 10KB required`);
+    return false;
+  }
+
+  // Verify file path exists
+  if (!file.path || !fs.existsSync(file.path)) {
+    console.log(`[DEBUG] File path does not exist: ${file?.path || 'undefined'}`);
+    return false;
+  }
+
+  // Verify it's actually a file
+  try {
+    const stats = fs.statSync(file.path);
+    if (!stats.isFile()) {
+      console.log(`[DEBUG] Path exists but is not a file: ${file.path}`);
+      return false;
+    }
+  } catch (err) {
+    console.log(`[DEBUG] Error checking file stats: ${err.message}`);
+    return false;
+  }
+
+  // Try to read the first few bytes to verify it's a valid file
+  try {
+    // Just read the first 1024 bytes to check if file is readable
+    const fd = fs.openSync(file.path, 'r');
+    const buffer = Buffer.alloc(1024);
+    const bytesRead = fs.readSync(fd, buffer, 0, 1024, 0);
+    fs.closeSync(fd);
+    
+    if (bytesRead < 10) {
+      console.log(`[DEBUG] File contains insufficient data (only ${bytesRead} bytes read)`);
+      return false;
+    }
+  } catch (err) {
+    console.log(`[DEBUG] Error reading file: ${err.message}`);
+    return false;
+  }
+
+  console.log(`[DEBUG] File '${file.filename}' (${file.size} bytes) is valid for ffmpeg processing`);
+  return true;
+}
+
 async function recordWebsite(url, duration = 10) {
   console.log(`[DEBUG] Preparing to record ${url} for ${duration} seconds with Playwright...`);
   
@@ -505,38 +563,14 @@ async function recordWebsite(url, duration = 10) {
     
     // After finding video file, try to improve its quality with ffmpeg if available
     if (foundVideoFile) {
+      // Skip ffmpeg for invalid files - central check in one place with detailed logging
+      if (!isValidForFfmpeg(foundVideoFile)) {
+        console.log(`[DEBUG] Skipping ffmpeg enhancement for invalid file: ${foundVideoFile.filename}`);
+        return foundVideoFile.filename;
+      }
+      
       try {
-        // First check: If filename starts with 'blank-', it's a placeholder we created - skip processing completely
-        if (foundVideoFile.filename.startsWith('blank-')) {
-          console.log(`[DEBUG] Detected blank placeholder file (${foundVideoFile.filename}). Skipping enhancement.`);
-          return foundVideoFile.filename;
-        }
-        
-        // Second check: if the file is too small to be a valid video
-        if (foundVideoFile.size < 10000) {
-          console.log(`[DEBUG] File size (${foundVideoFile.size} bytes) is too small for a valid video. Skipping enhancement.`);
-          return foundVideoFile.filename;
-        }
-        
-        // Verify file exists and is readable before proceeding
-        if (!fs.existsSync(foundVideoFile.path) || !fs.statSync(foundVideoFile.path).isFile()) {
-          console.log(`[DEBUG] Video file does not exist or is not a file: ${foundVideoFile.path}`);
-          return foundVideoFile.filename;
-        }
-        
-        // Additional check: make sure the file contains valid data
-        try {
-          const fileData = fs.readFileSync(foundVideoFile.path, { encoding: null, flag: 'r' });
-          if (!fileData || fileData.length < 10000) {
-            console.log(`[DEBUG] File contains insufficient data for ffmpeg processing: ${fileData ? fileData.length : 0} bytes`);
-            return foundVideoFile.filename;
-          }
-        } catch (readError) {
-          console.warn(`[DEBUG] Could not read file for validation: ${readError.message}`);
-          return foundVideoFile.filename;
-        }
-        
-        // Attempt to improve video quality with ffmpeg if available
+        // At this point, we know the file is valid for ffmpeg processing
         const originalPath = foundVideoFile.path;
         const enhancedPath = path.join(uploadsDir, `enhanced-${foundVideoFile.filename}`);
         
