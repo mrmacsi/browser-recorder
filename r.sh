@@ -12,11 +12,17 @@ ssh $VM_USER@$VM_IP << EOF
   echo "Changing to project directory..."
   cd $PROJECT_DIR
   
-  echo "Pulling latest changes from git..."
-  git pull
+  echo "Setting Git to trust the project directory..."
+  sudo git config --global --add safe.directory $PROJECT_DIR
   
-  echo "Ensuring logs directory exists..."
-  mkdir -p $PROJECT_DIR/logs
+  echo "Pulling latest changes from git with sudo..."
+  sudo git pull
+  
+  echo "Ensuring logs and metrics directories exist with proper permissions..."
+  sudo mkdir -p $PROJECT_DIR/logs
+  sudo mkdir -p $PROJECT_DIR/logs/metrics
+  sudo chmod 777 $PROJECT_DIR/logs
+  sudo chmod 777 $PROJECT_DIR/logs/metrics
   
   echo "Checking if PM2 is running the application..."
   if pm2 list | grep -q "browser-recorder"; then
