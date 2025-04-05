@@ -59,11 +59,9 @@ sudo apt-get install -y \
   bc \
   jq
 
-# Kill any existing processes that might be using ports 7777 and 5443
+# Kill any existing processes that might be using port 5443
 echo "Ensuring port 5443 is free..."
 sudo lsof -ti:5443 | xargs -r sudo kill || true
-echo "Ensuring port 7777 is free..."
-sudo lsof -ti:7777 | xargs -r sudo kill || true
 
 # Stop any existing PM2 processes to avoid port conflicts
 if command -v pm2 &> /dev/null; then
@@ -145,7 +143,7 @@ module.exports = {
     max_memory_restart: '1G',
     env: {
       NODE_ENV: 'production',
-      HTTPS_PORT: 5443,
+      PORT: 5443,
       NODE_OPTIONS: '--max-old-space-size=4096',
       SSL_KEY_PATH: '/etc/ssl/browser-recorder/privkey.pem',
       SSL_CERT_PATH: '/etc/ssl/browser-recorder/cert.pem'

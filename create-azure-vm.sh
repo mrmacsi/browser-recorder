@@ -180,12 +180,12 @@ az vm run-command invoke \
 PUBLIC_IP=$(az vm show -d -g "$RESOURCE_GROUP" -n "$VM_NAME" --query publicIps -o tsv)
 echo "VM $VM_NAME created with public IP: $PUBLIC_IP"
 
-# Open port 5443 for HTTPS browser recorder service
-echo "Opening port 5443 for HTTPS browser recorder service..."
+# Open port 5443 for browser recorder service
+echo "Opening port 5443 for browser recorder service..."
 az network nsg rule create \
     --resource-group "$RESOURCE_GROUP" \
     --nsg-name "${VM_NAME}NSG" \
-    --name BrowserRecorderHTTPS \
+    --name BrowserRecorderService \
     --protocol tcp \
     --priority 1001 \
     --destination-port-range 5443 \
@@ -194,7 +194,7 @@ az network nsg rule create \
 if [ $? -ne 0 ]; then
     echo "Failed to open ports. You may need to open them manually."
     echo "Run the following command to open the port:"
-    echo "az network nsg rule create --resource-group $RESOURCE_GROUP --nsg-name ${VM_NAME}NSG --name BrowserRecorderHTTPS --protocol tcp --priority 1001 --destination-port-range 5443 --access allow"
+    echo "az network nsg rule create --resource-group $RESOURCE_GROUP --nsg-name ${VM_NAME}NSG --name BrowserRecorderService --protocol tcp --priority 1001 --destination-port-range 5443 --access allow"
 fi
 
 # Wait for the VM to be fully provisioned

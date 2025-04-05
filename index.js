@@ -13,8 +13,7 @@ if (!fs.existsSync(uploadsDir)) {
 }
 
 const app = express();
-const PORT = process.env.PORT || 7777;
-const HTTPS_PORT = process.env.HTTPS_PORT || 5443;
+const PORT = process.env.PORT || 5443;
 const isDev = process.env.NODE_ENV !== 'production';
 
 // Enable CORS for development
@@ -219,14 +218,17 @@ app.delete('/api/files/:filename', (req, res) => {
   }
 });
 
-// Create HTTP server
-const httpServer = http.createServer(app);
+// Start the server based on environment
+let server;
 
-// Setup HTTPS server if not in development mode
-let httpsServer;
-if (!isDev) {
+if (isDev) {
+  // In development, use HTTP
+  console.log('Starting HTTP server in development mode');
+  server = http.createServer(app);
+} else {
+  // In production, use HTTPS
   try {
-    // Try to read SSL certificates if available
+    // Try to read SSL certificates
     const privateKeyPath = process.env.SSL_KEY_PATH || path.join(__dirname, 'ssl', 'privkey.pem');
     const certificatePath = process.env.SSL_CERT_PATH || path.join(__dirname, 'ssl', 'cert.pem');
     
@@ -235,70 +237,40 @@ if (!isDev) {
       const certificate = fs.readFileSync(certificatePath, 'utf8');
       const credentials = { key: privateKey, cert: certificate };
       
-      // Create HTTPS server with the certificates
-      httpsServer = https.createServer(credentials, app);
+      server = https.createServer(credentials, app);
       console.log('SSL certificates loaded successfully');
     } else {
       console.error('SSL certificates not found. HTTPS server cannot start.');
       console.error(`Looked for certificates at: ${privateKeyPath} and ${certificatePath}`);
-      // Don't exit in production - we'll try to run HTTP server instead
+      process.exit(1);
     }
   } catch (error) {
     console.error('Error loading SSL certificates:', error.message);
-    console.error('HTTPS server will not be started');
+    process.exit(1);
   }
 }
 
-// Start the appropriate server based on environment
-if (isDev) {
-  // Development mode - always use HTTP
-  console.log('Starting HTTP server in development mode (No SSL required)');
-  const startServer = (port) => {
-    httpServer.listen(port)
-      .on('error', (err) => {
-        if (err.code === 'EADDRINUSE') {
-          console.error(`Port ${port} is already in use. Please kill the process using this port.`);
-          process.exit(1);
-        } else {
-          console.error('Server error:', err);
-        }
-      })
-      .on('listening', () => {
-        const address = httpServer.address();
-        console.log(`HTTP Server running on port ${address.port}`);
-      });
-  };
-  
-  startServer(PORT);
-} else {
-  // Production mode - prefer HTTPS, fallback to HTTP
-  if (httpsServer) {
-    httpsServer.listen(HTTPS_PORT, () => {
-      console.log(`HTTPS Server running on port ${HTTPS_PORT}`);
-    });
+// Start the server on the specified port
+server.listen(PORT, () => {
+  console.log(`Server running on port ${PORT} (${isDev ? 'HTTP' : 'HTTPS'})`);
+}).on('error', (err) => {
+  if (err.code === 'EADDRINUSE') {
+    console.error(`Port ${PORT} is already in use. Please kill the process using this port.`);
+    process.exit(1);
   } else {
-    // Fallback to HTTP in production if HTTPS setup failed
-    httpServer.listen(PORT, () => {
-      console.log(`HTTP Server running on port ${PORT} (SSL setup failed)`);
-    });
+    console.error('Server error:', err);
   }
-}
+});
 
 // Handle graceful shutdown
 process.on('SIGTERM', () => {
   console.log('SIGTERM received, shutting down gracefully');
-  httpServer.close(() => console.log('HTTP server closed'));
-  if (httpsServer) {
-    httpsServer.close(() => console.log('HTTPS server closed'));
-  }
+  server.close(() => console.log('Server closed'));
   process.exit(0);
 });
 
 process.on('SIGINT', () => {
   console.log('SIGINT received, shutting down gracefully');
-  httpServer.close(() => console.log('HTTP server closed'));
-  if (httpsServer) {
-    httpsServer.close(() => console.log('HTTPS server closed'));
-  }
+  server.close(() => console.log('Server closed'));
   process.exit(0);
 }); 
