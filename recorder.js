@@ -227,9 +227,24 @@ if (isLinux && !fs.existsSync(azureTempSsd)) {
 }
 
 // Choose optimal temp directory: Azure temp SSD > RAM disk > system temp
-const tempDir = fs.existsSync(azureTempSsd) ? azureTempSsd : 
-               (useRamDisk && fs.existsSync('/mnt/ramdisk') ? '/mnt/ramdisk' : os.tmpdir());
-console.log(`[DEBUG] Using temp directory: ${tempDir} (RAM-based: ${useRamDisk}, Azure SSD: ${fs.existsSync(azureTempSsd)})`);
+// Make sure we check if we're on Azure first (which would have /mnt/resource accessible)
+// For local environments, prefer system temp directory for compatibility
+const isAzureVM = isLinux && fs.existsSync('/mnt/resource');
+const isLocalDev = process.env.NODE_ENV === 'development' || !isLinux;
+
+let tempDir;
+if (isAzureVM && fs.existsSync(azureTempSsd)) {
+  tempDir = azureTempSsd;
+  console.log('[DEBUG] Using Azure temporary SSD for recordings');
+} else if (useRamDisk && fs.existsSync('/mnt/ramdisk')) {
+  tempDir = '/mnt/ramdisk';
+  console.log('[DEBUG] Using RAM disk for recordings');
+} else {
+  tempDir = os.tmpdir();
+  console.log('[DEBUG] Using system temp directory for recordings');
+}
+
+console.log(`[DEBUG] Using temp directory: ${tempDir} (RAM-based: ${useRamDisk}, Azure SSD: ${isAzureVM && fs.existsSync(azureTempSsd)}, Local Dev: ${isLocalDev})`);
 console.log(`[DEBUG] Temp directory permissions:`);
 try {
   execSync(`ls -la ${tempDir}`, { stdio: 'inherit' });
@@ -265,8 +280,11 @@ const ACTIVITY_DELAY = 100; // Reduced delay for even smoother activity (was 150
 const VIDEO_WIDTH = 1280; // Reduced from 1920 to 1280
 const VIDEO_HEIGHT = 720; // Reduced from 1080 to 720
 const FFMPEG_PATH = process.env.FFMPEG_PATH || 'ffmpeg';
-// Always try to use hardware acceleration when available, regardless of environment
-const USE_HARDWARE_ACCELERATION = process.env.HARDWARE_ACCELERATION === 'true' || process.env.NODE_ENV === 'development';
+
+// For hardware acceleration, be more cautious on local environments
+const isLocalEnvironment = process.env.NODE_ENV === 'development' || !isLinux;
+// Always try to use hardware acceleration when available, but be cautious with local environments
+const USE_HARDWARE_ACCELERATION = process.env.HARDWARE_ACCELERATION === 'true' || (process.env.NODE_ENV === 'development' && !isLocalEnvironment);
 const DISABLE_PAGE_ACTIVITY = false; // Enable page activity to ensure recording works
 
 // Maintain frame timing metrics
@@ -634,9 +652,16 @@ async function recordWebsite(url, duration = 10) {
         '--enable-native-gpu-memory-buffers',
         '--enable-gpu-compositing',
         '--enable-oop-rasterization',
-        '--use-gl=egl',  // Use EGL for hardware acceleration
         '--ignore-gpu-blocklist'
       );
+      
+      // Only use EGL on Linux/Azure VM environments, as it might not be available on macOS or Windows
+      if (isLinux && !isLocalEnvironment) {
+        log('Using EGL for hardware acceleration (Linux server environment)');
+        browserArgs.push('--use-gl=egl');
+      } else {
+        log('Using default OpenGL backend for hardware acceleration (local environment)');
+      }
     } else {
       log('Using software rendering for video recording');
       browserArgs.push('--disable-gpu');
@@ -1043,8 +1068,12 @@ async function recordWebsite(url, duration = 10) {
           const hwAccelParams = useHardwareAcceleration ? '-hwaccel auto -hwaccel_device 0 ' : '';
           
           // Optimize ffmpeg parameters based on the frame rate we achieved
-          if (isDev) {
-            // Fast mode for development - speed over quality, but still decent
+          if (isDev && isLocalEnvironment) {
+            // Local development - use simpler parameters that work on most systems
+            ffmpegCmd = `${FFMPEG_PATH} -y ${hwAccelParams}-i "${originalPath}" -c:v libvpx-vp9 -b:v 2M -crf 30 -deadline good -cpu-used 4 -threads 2 "${enhancedPath}"`;
+            log(`Using conservative FFmpeg settings for local environment: ${ffmpegCmd}`);
+          } else if (isDev) {
+            // Fast mode for cloud development - speed over quality, but still decent
             ffmpegCmd = `${FFMPEG_PATH} -y ${hwAccelParams}-i "${originalPath}" -c:v libvpx-vp9 -b:v 2M ${achievedGoodFps ? '-deadline realtime' : '-deadline realtime'} -cpu-used ${achievedGoodFps ? '8' : '8'} -pix_fmt yuv420p -quality ${achievedGoodFps ? 'realtime' : 'realtime'} -crf ${achievedGoodFps ? '36' : '36'} -speed ${achievedGoodFps ? '8' : '8'} -tile-columns 6 -frame-parallel 1 -threads 6 "${enhancedPath}"`;
           } else {
             // Balanced mode for production - good quality with reasonable speed
