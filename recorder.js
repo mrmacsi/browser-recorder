@@ -120,6 +120,12 @@ async function enhanceVideoQuality(inputPath, outputPath, logger, videoOptions =
         '/dev/null'
       ];
       
+      // Add duration trimming if specified
+      if (videoOptions.duration) {
+        firstPassArgs.splice(2, 0, '-t', videoOptions.duration.toString());
+        logger(`Applying duration limit: ${videoOptions.duration} seconds`);
+      }
+      
       if (os.platform() === 'win32') {
         firstPassArgs[firstPassArgs.length - 1] = 'NUL';
       }
@@ -193,6 +199,11 @@ async function enhanceVideoQuality(inputPath, outputPath, logger, videoOptions =
           outputPath
         ];
         
+        // Add duration trimming if specified
+        if (videoOptions.duration) {
+          secondPassArgs.splice(2, 0, '-t', videoOptions.duration.toString());
+        }
+        
         logger(`Running second pass with args: ${secondPassArgs.join(' ')}`);
         
         await new Promise((resolvePass, rejectPass) => {
@@ -262,6 +273,7 @@ async function enhanceVideoQuality(inputPath, outputPath, logger, videoOptions =
       const aspectRatio = videoOptions.aspectRatio || null;
       const videoWidth = videoOptions.width || null;
       const videoHeight = videoOptions.height || null;
+      const duration = videoOptions.duration || null;
       
       return new Promise((resolvePass, rejectPass) => {
         const ffmpegArgs = [
@@ -278,6 +290,12 @@ async function enhanceVideoQuality(inputPath, outputPath, logger, videoOptions =
           '-pix_fmt', 'yuv420p', // Standard pixel format (faster)
           '-r', `${VIDEO_FPS}`,
         ];
+        
+        // Add duration trimming if specified
+        if (duration) {
+          ffmpegArgs.splice(0, 0, '-t', duration.toString());
+          logger(`Limiting video duration to ${duration} seconds`);
+        }
         
         // Add aspect ratio forcing for vertical videos if specified
         if (aspectRatio && videoWidth && videoHeight) {
@@ -829,7 +847,8 @@ async function recordWebsite(url, duration = 10, options = {}) {
         await enhanceVideoQuality(rawVideoPath, finalVideoPath, log, {
           width: videoWidth,
           height: videoHeight,
-          aspectRatio: options.aspectRatio
+          aspectRatio: options.aspectRatio,
+          duration: duration
         });
         
         if (fs.existsSync(finalVideoPath)) {
