@@ -75,6 +75,9 @@ function createSessionLogger(sessionId) {
     metricsStream.write(timestampedMessage + '\n');
   };
   
+  // Initialize metrics file with header
+  metricsLogger(`Metrics file created for session ${sessionId}`);
+  
   return { log: logger, logMetrics: metricsLogger, logFilePath, metricsFilePath };
 }
 
@@ -457,6 +460,16 @@ async function recordWebsite(url, duration = 10, options = {}) {
   log(`Temp directory: ${tempDir}`);
   log(`Session started at: ${new Date(sessionStartTime).toISOString()}`);
   
+  // Log system metrics
+  logMetrics(`SESSION_START,ID=${sessionId},URL=${recordingUrl},DURATION=${duration}s`);
+  logMetrics(`SYSTEM,CORES=${numCPUs},RAM=${totalMem}GB,PLATFORM=${os.platform()},RELEASE=${os.release()}`);
+  logMetrics(`VIDEO_SETTINGS,WIDTH=${videoWidth},HEIGHT=${videoHeight},FPS=${videoFps},BITRATE=${VIDEO_BITRATE}`);
+  logMetrics(`QUALITY_PROFILE=${quality},FAST_MODE=${fastMode},HARDWARE_ACCELERATION=${USE_HARDWARE_ACCELERATION ? 'Enabled' : 'Disabled'}`);
+  
+  // Regular log memory usage
+  const initialMemUsage = process.memoryUsage();
+  logMetrics(`MEMORY_USAGE,RSS=${Math.round(initialMemUsage.rss / 1024 / 1024)}MB,HEAP_TOTAL=${Math.round(initialMemUsage.heapTotal / 1024 / 1024)}MB,HEAP_USED=${Math.round(initialMemUsage.heapUsed / 1024 / 1024)}MB`);
+  
   // Generate filenames
   const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
   const rawVideoFilename = `raw-recording-${sessionId}-${timestamp}.webm`;
@@ -515,6 +528,10 @@ async function recordWebsite(url, duration = 10, options = {}) {
       browserArgs.push('--use-gl=egl');
     }
     
+    // Log browser launch time
+    const browserStartTime = Date.now();
+    logMetrics(`BROWSER_LAUNCH_START,TIME=${browserStartTime}`);
+    
     // Launch browser with longer timeout and better gpu usage
     log('Launching browser with enhanced graphics settings...');
     browser = await chromium.launch({
@@ -526,6 +543,9 @@ async function recordWebsite(url, duration = 10, options = {}) {
       handleSIGTERM: true,
       handleSIGHUP: true
     });
+    
+    const browserLaunchDuration = Date.now() - browserStartTime;
+    logMetrics(`BROWSER_LAUNCH_COMPLETE,DURATION=${browserLaunchDuration}ms`);
     log('Browser launched successfully with enhanced graphics settings');
     
     // Create browser context with high quality video recording
@@ -541,6 +561,10 @@ async function recordWebsite(url, duration = 10, options = {}) {
     const recordingFileName = `recording-${sessionId}-${Date.now()}.webm`;
     const recordingPath = path.join(tempDir, recordingFileName);
     log(`Setting explicit recording path: ${recordingPath}`);
+    
+    // Log context creation time
+    const contextStartTime = Date.now();
+    logMetrics(`CONTEXT_CREATION_START,TIME=${contextStartTime}`);
     
     context = await browser.newContext({
       viewport: { width: videoWidth, height: videoHeight },
@@ -559,6 +583,9 @@ async function recordWebsite(url, duration = 10, options = {}) {
         'Accept-Language': 'en-US,en;q=0.9'
       }
     });
+    
+    const contextCreationDuration = Date.now() - contextStartTime;
+    logMetrics(`CONTEXT_CREATION_COMPLETE,DURATION=${contextCreationDuration}ms`);
     
     // Store known recording path for later use if Playwright fails to return it
     page = await context.newPage();
@@ -616,12 +643,19 @@ async function recordWebsite(url, duration = 10, options = {}) {
     
     log('Page created with optimized settings');
     
+    // Log the navigation time
+    const navigationStartTime = Date.now();
+    logMetrics(`PAGE_NAVIGATION_START,URL=${recordingUrl},TIME=${navigationStartTime}`);
+    
     // Navigate to URL with better settings
     log(`Loading page with high quality settings: ${recordingUrl}`);
     await page.goto(recordingUrl, { 
       waitUntil: 'networkidle',
       timeout: 60000
     });
+    
+    const navigationDuration = Date.now() - navigationStartTime;
+    logMetrics(`PAGE_NAVIGATION_COMPLETE,DURATION=${navigationDuration}ms,TITLE="${await page.title()}"`);
     
     log(`Page loaded. Title: ${await page.title()}`);
     
@@ -651,9 +685,13 @@ async function recordWebsite(url, duration = 10, options = {}) {
         document.head.appendChild(style);
       });
       log('Added vertical video optimizations to page');
+      logMetrics(`VERTICAL_OPTIMIZATIONS_APPLIED,ASPECT_RATIO=${options.aspectRatio}`);
     }
     
     // Scroll the page to ensure all content is rendered
+    const scrollStartTime = Date.now();
+    logMetrics(`PAGE_SCROLL_START,TIME=${scrollStartTime}`);
+    
     await page.evaluate(async () => {
       const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
       const height = document.body.scrollHeight;
@@ -668,11 +706,21 @@ async function recordWebsite(url, duration = 10, options = {}) {
       window.scrollTo(0, 0);
     });
     
+    const scrollDuration = Date.now() - scrollStartTime;
+    logMetrics(`PAGE_SCROLL_COMPLETE,DURATION=${scrollDuration}ms`);
+    
     log('Page content fully rendered for better video quality');
+    
+    // Log recording start
+    const recordingStartTime = Date.now();
+    logMetrics(`RECORDING_START,TIME=${recordingStartTime},DURATION=${duration}s`);
     
     // Wait for recording duration
     log(`Recording high quality video for ${duration} seconds...`);
     await new Promise(resolve => setTimeout(resolve, duration * 1000));
+    
+    const recordingDuration = Date.now() - recordingStartTime;
+    logMetrics(`RECORDING_COMPLETE,DURATION=${recordingDuration}ms`);
     log('Recording duration completed');
     
     // Close page to finish recording
@@ -752,11 +800,14 @@ async function recordWebsite(url, duration = 10, options = {}) {
         if (recentVideos.length > 0) {
           recordedVideoPath = recentVideos[0].path;
           log(`Using most recent video: ${recordedVideoPath}, size: ${recentVideos[0].size} bytes`);
+          logMetrics(`VIDEO_FOUND,PATH=${recordedVideoPath},SIZE=${recentVideos[0].size}`);
         } else {
           log(`No recent videos found in temp directory`);
+          logMetrics(`ERROR,NO_VIDEOS_FOUND,TEMP_DIR=${tempDir}`);
         }
       } catch (searchError) {
         log(`Error searching for videos: ${searchError.message}`);
+        logMetrics(`ERROR,SEARCH_FAILED,MESSAGE=${searchError.message}`);
       }
     }
     
@@ -771,6 +822,7 @@ async function recordWebsite(url, duration = 10, options = {}) {
       
       // Enhance the video quality with ffmpeg
       log('Enhancing video quality with ffmpeg...');
+      logMetrics(`ENHANCEMENT_START,TIME=${Date.now()},RAW_SIZE=${fileSize}`);
       
       try {
         // Enhance the video quality, passing options for aspect ratio
@@ -783,6 +835,7 @@ async function recordWebsite(url, duration = 10, options = {}) {
         if (fs.existsSync(finalVideoPath)) {
           const enhancedSize = fs.statSync(finalVideoPath).size;
           log(`Enhanced video created successfully: ${finalVideoPath}, size: ${enhancedSize} bytes`);
+          logMetrics(`ENHANCEMENT_COMPLETE,ENHANCED_SIZE=${enhancedSize},COMPRESSION_RATIO=${(enhancedSize/fileSize).toFixed(2)}`);
           
           // Set proper permissions
           fs.chmodSync(finalVideoPath, 0o644);
@@ -796,6 +849,7 @@ async function recordWebsite(url, duration = 10, options = {}) {
           };
         } else {
           log('Failed to create enhanced video, falling back to original');
+          logMetrics(`ENHANCEMENT_FAILED,REASON=NO_OUTPUT_FILE`);
           
           // Copy the original as fallback
           fs.copyFileSync(rawVideoPath, finalVideoPath);
@@ -809,6 +863,7 @@ async function recordWebsite(url, duration = 10, options = {}) {
         }
       } catch (enhanceError) {
         log(`Error enhancing video: ${enhanceError.message}`);
+        logMetrics(`ENHANCEMENT_ERROR,MESSAGE=${enhanceError.message}`);
         
         // Copy the original as fallback
         fs.copyFileSync(rawVideoPath, finalVideoPath);
@@ -823,10 +878,12 @@ async function recordWebsite(url, duration = 10, options = {}) {
       }
     } else {
       log(`No video recording found at: ${recordedVideoPath}`);
+      logMetrics(`ERROR,NO_VIDEO_RECORDING_FOUND,PATH=${recordedVideoPath}`);
     }
     
     // If video recording failed, return error
     log(`Video recording failed`);
+    logMetrics(`RECORDING_FAILED,SESSION_DURATION=${Date.now() - sessionStartTime}ms`);
     return { 
       error: "Failed to create video recording",
       logFile: path.basename(logFilePath),
@@ -835,6 +892,7 @@ async function recordWebsite(url, duration = 10, options = {}) {
   } catch (error) {
     log(`Recording error: ${error.message}`);
     log(`Error stack: ${error.stack}`);
+    logMetrics(`FATAL_ERROR,MESSAGE=${error.message},SESSION_DURATION=${Date.now() - sessionStartTime}ms`);
     
     return { 
       error: error.message,
@@ -842,6 +900,10 @@ async function recordWebsite(url, duration = 10, options = {}) {
       metricsFile: path.basename(metricsFilePath)
     };
   } finally {
+    // Log final memory usage
+    const finalMemUsage = process.memoryUsage();
+    logMetrics(`FINAL_MEMORY_USAGE,RSS=${Math.round(finalMemUsage.rss / 1024 / 1024)}MB,HEAP_TOTAL=${Math.round(finalMemUsage.heapTotal / 1024 / 1024)}MB,HEAP_USED=${Math.round(finalMemUsage.heapUsed / 1024 / 1024)}MB`);
+    
     // Clean up resources in order
     try {
       // Context is usually already closed in the normal flow
@@ -849,8 +911,10 @@ async function recordWebsite(url, duration = 10, options = {}) {
         try {
           await context.close().catch(e => log(`Context close error: ${e.message}`));
           log('Context closed in finally block');
+          logMetrics(`CONTEXT_CLOSED_IN_CLEANUP`);
         } catch (contextError) {
           log(`Error closing context: ${contextError.message}`);
+          logMetrics(`CONTEXT_CLOSE_ERROR,MESSAGE=${contextError.message}`);
         }
       }
       
@@ -858,6 +922,7 @@ async function recordWebsite(url, duration = 10, options = {}) {
       if (browser) {
         await browser.close().catch(e => log(`Browser close error: ${e.message}`));
         log('Browser closed');
+        logMetrics(`BROWSER_CLOSED`);
       }
       
       // Cleanup temporary raw video if it exists
@@ -865,15 +930,50 @@ async function recordWebsite(url, duration = 10, options = {}) {
         try {
           fs.unlinkSync(rawVideoPath);
           log(`Temporary raw video deleted: ${rawVideoPath}`);
+          logMetrics(`TEMP_RAW_VIDEO_DELETED,PATH=${rawVideoPath}`);
         } catch (unlinkError) {
           log(`Warning: Failed to delete temporary raw video: ${unlinkError.message}`);
+          logMetrics(`TEMP_VIDEO_DELETE_ERROR,MESSAGE=${unlinkError.message}`);
         }
+      }
+      
+      // Cleanup all temporary video files in temp directory
+      try {
+        if (fs.existsSync(tempDir)) {
+          const tempFiles = fs.readdirSync(tempDir)
+            .filter(file => file.endsWith('.webm'))
+            .map(file => path.join(tempDir, file));
+          
+          // Log number of temp files to be deleted
+          log(`Cleaning up ${tempFiles.length} temporary video files from ${tempDir}`);
+          logMetrics(`TEMP_CLEANUP_START,FILE_COUNT=${tempFiles.length}`);
+          
+          // Delete each temporary file
+          let deletedCount = 0;
+          for (const file of tempFiles) {
+            try {
+              fs.unlinkSync(file);
+              deletedCount++;
+            } catch (fileError) {
+              log(`Failed to delete temporary file: ${file}, error: ${fileError.message}`);
+              logMetrics(`TEMP_FILE_DELETE_ERROR,FILE=${file},MESSAGE=${fileError.message}`);
+            }
+          }
+          
+          log(`Successfully deleted ${deletedCount} of ${tempFiles.length} temporary video files`);
+          logMetrics(`TEMP_CLEANUP_COMPLETE,DELETED=${deletedCount},TOTAL=${tempFiles.length}`);
+        }
+      } catch (cleanupError) {
+        log(`Error cleaning up temp directory: ${cleanupError.message}`);
+        logMetrics(`TEMP_DIR_CLEANUP_ERROR,MESSAGE=${cleanupError.message}`);
       }
     } catch (finallyError) {
       log(`Error in cleanup: ${finallyError.message}`);
+      logMetrics(`CLEANUP_ERROR,MESSAGE=${finallyError.message}`);
     }
     
     log(`Recording session ${sessionId} complete`);
+    logMetrics(`SESSION_COMPLETE,DURATION=${Date.now() - sessionStartTime}ms`);
   }
 }
 
