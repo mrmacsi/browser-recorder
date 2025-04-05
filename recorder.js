@@ -506,6 +506,12 @@ async function recordWebsite(url, duration = 10) {
     // After finding video file, try to improve its quality with ffmpeg if available
     if (foundVideoFile) {
       try {
+        // Check if the file is too small to be a valid video (likely a blank file)
+        if (foundVideoFile.size < 1000) {
+          console.log(`[DEBUG] File size (${foundVideoFile.size} bytes) is too small for a valid video. Skipping enhancement.`);
+          return foundVideoFile.filename;
+        }
+        
         // Attempt to improve video quality with ffmpeg if available
         const originalPath = foundVideoFile.path;
         const enhancedPath = path.join(uploadsDir, `enhanced-${foundVideoFile.filename}`);
@@ -528,18 +534,24 @@ async function recordWebsite(url, duration = 10) {
           // Enhance video with ffmpeg for smoother playback
           console.log(`[DEBUG] Enhancing video with ffmpeg (fast mode: ${isDev}): ${enhancedPath}`);
           console.log(`[DEBUG] ffmpeg command: ${ffmpegCmd}`);
-          execSync(ffmpegCmd, { 
-            stdio: 'inherit',
-            timeout: 120000 // 120 second timeout for higher quality processing
-          });
-          
-          // If enhancement succeeded, use the enhanced file
-          if (fs.existsSync(enhancedPath) && fs.statSync(enhancedPath).size > 0) {
-            console.log(`[DEBUG] Enhanced file exists: ${enhancedPath}, size: ${fs.statSync(enhancedPath).size} bytes`);
-            console.log(`[DEBUG] Using enhanced video: ${enhancedPath}`);
-            return path.basename(enhancedPath);
-          } else {
-            console.log(`[DEBUG] Enhanced video creation failed or resulted in empty file. Using original video.`);
+          try {
+            execSync(ffmpegCmd, { 
+              stdio: 'inherit',
+              timeout: 120000 // 120 second timeout for higher quality processing
+            });
+            
+            // If enhancement succeeded, use the enhanced file
+            if (fs.existsSync(enhancedPath) && fs.statSync(enhancedPath).size > 0) {
+              console.log(`[DEBUG] Enhanced file exists: ${enhancedPath}, size: ${fs.statSync(enhancedPath).size} bytes`);
+              console.log(`[DEBUG] Using enhanced video: ${enhancedPath}`);
+              return path.basename(enhancedPath);
+            } else {
+              console.log(`[DEBUG] Enhanced video creation failed or resulted in empty file. Using original video.`);
+              return foundVideoFile.filename;
+            }
+          } catch (ffmpegCmdError) {
+            console.warn(`[DEBUG] FFmpeg command execution failed: ${ffmpegCmdError.message}`);
+            console.warn(`[DEBUG] Returning original unenhanced video file`);
             return foundVideoFile.filename;
           }
         } catch (ffmpegError) {
