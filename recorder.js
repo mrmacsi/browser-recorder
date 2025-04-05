@@ -12,10 +12,11 @@ console.log(`System has ${numCPUs} CPU cores and ${totalMem}GB RAM`);
 
 // Use RAM disk if available for better I/O performance
 const isDev = process.env.NODE_ENV === 'development';
-const useRamDisk = process.env.USE_RAM_DISK === 'true' || fs.existsSync('/mnt/ramdisk') || true; // Always use RAM in all environments
+const useRamDisk = true; // Always use RAM-based operations by default
+const isLinux = os.platform() === 'linux';
 
-// Create a RAM disk if requested and we're on Linux (typical server environment)
-if (process.env.CREATE_RAM_DISK === 'true' && os.platform() === 'linux' && !fs.existsSync('/mnt/ramdisk')) {
+// Create a RAM disk automatically on Linux servers
+if (isLinux && !fs.existsSync('/mnt/ramdisk')) {
   try {
     console.log('Attempting to create RAM disk on Linux server...');
     // Create the mount point if it doesn't exist
