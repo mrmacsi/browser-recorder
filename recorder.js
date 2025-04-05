@@ -11,13 +11,21 @@ if (!fs.existsSync(logsDir)) {
   fs.mkdirSync(logsDir, { recursive: true });
 }
 
+// Create metrics directory specifically for performance data
+const metricsDir = path.resolve(__dirname, 'logs', 'metrics');
+if (!fs.existsSync(metricsDir)) {
+  fs.mkdirSync(metricsDir, { recursive: true });
+}
+
 // Function to create a logger for a specific recording session
 function createSessionLogger(sessionId) {
   const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
   const logFilePath = path.join(logsDir, `recording-${sessionId}-${timestamp}.log`);
+  const metricsFilePath = path.join(metricsDir, `metrics-${sessionId}-${timestamp}.log`);
   
   // Create a write stream for the log file
   const logStream = fs.createWriteStream(logFilePath, { flags: 'a' });
+  const metricsStream = fs.createWriteStream(metricsFilePath, { flags: 'a' });
   
   // Create a logger function that writes to both console and log file
   const logger = (message) => {
@@ -26,10 +34,19 @@ function createSessionLogger(sessionId) {
     logStream.write(timestampedMessage + '\n');
   };
   
+  // Create a metrics logger specifically for performance data
+  const metricsLogger = (message) => {
+    const timestampedMessage = `[${new Date().toISOString()}] ${message}`;
+    console.log(`METRICS: ${timestampedMessage}`);
+    metricsStream.write(timestampedMessage + '\n');
+  };
+  
   // Return the logger function and file path
   return { 
     log: logger,
-    logFilePath
+    logMetrics: metricsLogger,
+    logFilePath,
+    metricsFilePath
   };
 }
 
@@ -167,7 +184,7 @@ async function ensureBrowsersInstalled() {
 }
 
 // Helper function to generate a random animation on the page
-async function generatePageActivity(page, durationMs) {
+async function generatePageActivity(page, durationMs, logMetrics) {
   const startTime = Date.now();
   const endTime = startTime + durationMs;
   
@@ -227,6 +244,13 @@ async function generatePageActivity(page, durationMs) {
   
   log(`Page activity completed with ${activityCount} mouse movements`);
   log(`Frame statistics: ${fps} FPS, Avg: ${avgFrameTime.toFixed(2)}ms, Min: ${minFrameTime}ms, Max: ${maxFrameTime}ms`);
+  
+  // Log metrics to the dedicated metrics file
+  if (logMetrics) {
+    logMetrics(`FRAME_METRICS,${fps},${avgFrameTime.toFixed(2)},${minFrameTime},${maxFrameTime},${activityCount}`);
+    logMetrics(`FRAME_STATS,FPS=${fps},AVG_TIME=${avgFrameTime.toFixed(2)}ms,MIN=${minFrameTime}ms,MAX=${maxFrameTime}ms`);
+    logMetrics(`ACTIVITY_COUNT=${activityCount},DURATION=${totalDuration}ms,TARGET_FPS=${TARGET_FPS}`);
+  }
   
   return {
     fps,
@@ -329,13 +353,18 @@ async function recordWebsite(url, duration = 10) {
   const sessionId = uuidv4().substr(0, 8);
   
   // Create a logger for this session
-  const { log, logFilePath } = createSessionLogger(sessionId);
+  const { log, logMetrics, logFilePath, metricsFilePath } = createSessionLogger(sessionId);
   
   log(`Starting recording session ${sessionId} for ${url} with duration ${duration}s`);
+  logMetrics(`SESSION_START,ID=${sessionId},URL=${url},DURATION=${duration}s`);
   log(`System info: ${numCPUs} CPU cores, ${totalMem}GB RAM, Platform: ${os.platform()}, Release: ${os.release()}`);
+  logMetrics(`SYSTEM,CORES=${numCPUs},RAM=${totalMem}GB,PLATFORM=${os.platform()},RELEASE=${os.release()}`);
   log(`Free memory: ${Math.floor(os.freemem() / (1024 * 1024))}MB`);
+  logMetrics(`MEMORY,FREE=${Math.floor(os.freemem() / (1024 * 1024))}MB`);
   log(`Video settings: ${VIDEO_WIDTH}x${VIDEO_HEIGHT} @ ${VIDEO_FPS}fps (target: ${TARGET_FPS}fps)`);
+  logMetrics(`VIDEO_SETTINGS,WIDTH=${VIDEO_WIDTH},HEIGHT=${VIDEO_HEIGHT},FPS=${VIDEO_FPS},TARGET_FPS=${TARGET_FPS}`);
   log(`Hardware acceleration: ${USE_HARDWARE_ACCELERATION ? 'Enabled' : 'Disabled'}`);
+  logMetrics(`HARDWARE_ACCELERATION=${USE_HARDWARE_ACCELERATION ? 'Enabled' : 'Disabled'}`);
   
   // Double-check that uploads directory exists
   if (!fs.existsSync(uploadsDir)) {
@@ -562,8 +591,9 @@ async function recordWebsite(url, duration = 10) {
       if (!DISABLE_PAGE_ACTIVITY) {
         log(`Generating initial page activity...`);
         // Generate activity for longer duration to ensure recording works
-        frameStats = await generatePageActivity(page, 5000);
+        frameStats = await generatePageActivity(page, 5000, logMetrics);
         log(`Frame rate statistics: ${frameStats.fps} FPS, Avg frame time: ${frameStats.avgFrameTime.toFixed(2)}ms`);
+        logMetrics(`RECORDING_STATS,FPS=${frameStats.fps},AVG_FRAME_TIME=${frameStats.avgFrameTime.toFixed(2)}ms,MIN=${frameStats.minFrameTime}ms,MAX=${frameStats.maxFrameTime}ms`);
         log(`Frame time range: Min=${frameStats.minFrameTime}ms, Max=${frameStats.maxFrameTime}ms`);
         hasContent = true;
         
@@ -709,7 +739,8 @@ async function recordWebsite(url, duration = 10) {
         log(`Returning screenshot instead of video: ${screenshotFilename}`);
         return { 
           fileName: screenshotFilename,
-          logFile: path.basename(logFilePath)
+          logFile: path.basename(logFilePath),
+          metricsFile: path.basename(metricsFilePath)
         };
       }
       
@@ -722,7 +753,8 @@ async function recordWebsite(url, duration = 10) {
         // Return proper video filename for better UX
         return { 
           fileName: videoFilename,
-          logFile: path.basename(logFilePath)
+          logFile: path.basename(logFilePath),
+          metricsFile: path.basename(metricsFilePath)
         };
       } catch (writeError) {
         log(`Failed to write placeholder file: ${writeError.message}`);
@@ -735,14 +767,16 @@ async function recordWebsite(url, duration = 10) {
           log(`Created fallback placeholder: ${fallbackFilename}`);
           return { 
             fileName: videoFilename,
-            logFile: path.basename(logFilePath)
+            logFile: path.basename(logFilePath),
+            metricsFile: path.basename(metricsFilePath)
           };
         } catch (fallbackError) {
           log(`All recording methods failed: ${fallbackError.message}`);
           // Just return the name, we've tried our best
           return { 
             fileName: videoFilename,
-            logFile: path.basename(logFilePath)
+            logFile: path.basename(logFilePath),
+            metricsFile: path.basename(metricsFilePath)
           };
         }
       }
@@ -761,13 +795,15 @@ async function recordWebsite(url, duration = 10) {
           log(`Returning screenshot (${screenshotFilename}) instead of small video file (${foundVideoFile.size} bytes)`);
           return { 
             fileName: screenshotFilename,
-            logFile: path.basename(logFilePath)
+            logFile: path.basename(logFilePath),
+            metricsFile: path.basename(metricsFilePath)
           };
         }
         
         return { 
           fileName: foundVideoFile.filename,
-          logFile: path.basename(logFilePath)
+          logFile: path.basename(logFilePath),
+          metricsFile: path.basename(metricsFilePath)
         };
       }
       
@@ -818,13 +854,15 @@ async function recordWebsite(url, duration = 10) {
               log(`Using enhanced video: ${enhancedPath}`);
               return { 
                 fileName: path.basename(enhancedPath),
-                logFile: path.basename(logFilePath)
+                logFile: path.basename(logFilePath),
+                metricsFile: path.basename(metricsFilePath)
               };
             } else {
               log(`Enhanced video creation failed or resulted in empty file. Using original video.`);
               return { 
                 fileName: foundVideoFile.filename,
-                logFile: path.basename(logFilePath)
+                logFile: path.basename(logFilePath),
+                metricsFile: path.basename(metricsFilePath)
               };
             }
           } catch (ffmpegCmdError) {
@@ -832,7 +870,8 @@ async function recordWebsite(url, duration = 10) {
             log(`Returning original unenhanced video file`);
             return { 
               fileName: foundVideoFile.filename,
-              logFile: path.basename(logFilePath)
+              logFile: path.basename(logFilePath),
+              metricsFile: path.basename(metricsFilePath)
             };
           }
         } catch (ffmpegError) {
@@ -840,7 +879,8 @@ async function recordWebsite(url, duration = 10) {
           log(`FFmpeg error stack: ${ffmpegError.stack}`);
           return { 
             fileName: foundVideoFile.filename,
-            logFile: path.basename(logFilePath)
+            logFile: path.basename(logFilePath),
+            metricsFile: path.basename(metricsFilePath)
           };
         }
       } catch (enhancementError) {
@@ -848,112 +888,8 @@ async function recordWebsite(url, duration = 10) {
         log(`Enhancement error stack: ${enhancementError.stack}`);
         return { 
           fileName: foundVideoFile.filename,
-          logFile: path.basename(logFilePath)
-        };
-      }
-    }
-    
-    log(`Using video file: ${foundVideoFile.filename} (${foundVideoFile.size} bytes)`);
-    
-    // After finding video file, try to improve its quality with ffmpeg if available
-    if (foundVideoFile) {
-      // Skip ffmpeg for invalid files - central check in one place with detailed logging
-      if (!isValidForFfmpeg(foundVideoFile)) {
-        log(`Skipping ffmpeg enhancement for invalid file: ${foundVideoFile.filename}`);
-        
-        // If we have a screenshot, prefer that over a tiny video file
-        if (screenshotTaken && fs.existsSync(screenshotPath) && foundVideoFile.size < 50000) {
-          log(`Returning screenshot (${screenshotFilename}) instead of small video file (${foundVideoFile.size} bytes)`);
-          return { 
-            fileName: screenshotFilename,
-            logFile: path.basename(logFilePath)
-          };
-        }
-        
-        return { 
-          fileName: foundVideoFile.filename,
-          logFile: path.basename(logFilePath)
-        };
-      }
-      
-      try {
-        // At this point, we know the file is valid for ffmpeg processing
-        const originalPath = foundVideoFile.path;
-        const enhancedPath = path.join(uploadsDir, `enhanced-${foundVideoFile.filename}`);
-        
-        try {
-          // Check if ffmpeg is available
-          log('Checking if ffmpeg is available');
-          execSync(`${FFMPEG_PATH} -version`, { stdio: 'ignore' });
-          
-          // Choose optimal encoding settings based on hardware capabilities and measured performance
-          let ffmpegCmd;
-          
-          // If we got good frame rates, use higher quality settings
-          const achievedGoodFps = frameStats && frameStats.fps >= TARGET_FPS;
-          
-          // Add hardware acceleration parameters if available
-          const useHardwareAcceleration = USE_HARDWARE_ACCELERATION || isDev;
-          const hwAccelParams = useHardwareAcceleration ? '-hwaccel auto -hwaccel_device 0 ' : '';
-          
-          // Optimize ffmpeg parameters based on the frame rate we achieved
-          if (isDev) {
-            // Fast mode for development - speed over quality, but still decent
-            ffmpegCmd = `${FFMPEG_PATH} -y ${hwAccelParams}-i "${originalPath}" -c:v libvpx-vp9 -b:v 4M ${achievedGoodFps ? '-deadline realtime' : '-deadline good'} -cpu-used ${achievedGoodFps ? '8' : '4'} -pix_fmt yuv420p -quality ${achievedGoodFps ? 'realtime' : 'good'} -crf ${achievedGoodFps ? '30' : '26'} -speed ${achievedGoodFps ? '8' : '6'} -tile-columns 6 -frame-parallel 1 -threads ${numCPUs} "${enhancedPath}"`;
-          } else {
-            // Balanced mode for production - good quality with reasonable speed
-            ffmpegCmd = `${FFMPEG_PATH} -y ${hwAccelParams}-i "${originalPath}" -c:v libvpx-vp9 -b:v 6M -deadline ${achievedGoodFps ? 'good' : 'best'} -cpu-used ${achievedGoodFps ? '4' : '2'} -pix_fmt yuv420p -quality good -crf ${achievedGoodFps ? '22' : '18'} -speed ${achievedGoodFps ? '3' : '2'} -tile-columns 4 -frame-parallel 1 -threads ${numCPUs} "${enhancedPath}"`;
-          }
-          
-          // Add frame rate info to the log
-          log(`Enhancing video with ffmpeg (quality: ${achievedGoodFps ? 'optimized for speed' : 'optimized for quality'}, hardware acceleration: ${useHardwareAcceleration ? 'enabled' : 'disabled'}): ${enhancedPath}`);
-          log(`Measured performance: ${frameStats ? frameStats.fps + ' FPS' : 'No measurements available'}`);
-          log(`ffmpeg command: ${ffmpegCmd}`);
-          
-          // Enhance video with ffmpeg for smoother playback
-          try {
-            execSync(ffmpegCmd, { 
-              stdio: 'inherit',
-              timeout: 120000 // 120 second timeout for higher quality processing
-            });
-            
-            // If enhancement succeeded, use the enhanced file
-            if (fs.existsSync(enhancedPath) && fs.statSync(enhancedPath).size > 0) {
-              log(`Enhanced file exists: ${enhancedPath}, size: ${fs.statSync(enhancedPath).size} bytes`);
-              log(`Using enhanced video: ${enhancedPath}`);
-              return { 
-                fileName: path.basename(enhancedPath),
-                logFile: path.basename(logFilePath)
-              };
-            } else {
-              log(`Enhanced video creation failed or resulted in empty file. Using original video.`);
-              return { 
-                fileName: foundVideoFile.filename,
-                logFile: path.basename(logFilePath)
-              };
-            }
-          } catch (ffmpegCmdError) {
-            log(`FFmpeg command execution failed: ${ffmpegCmdError.message}`);
-            log(`Returning original unenhanced video file`);
-            return { 
-              fileName: foundVideoFile.filename,
-              logFile: path.basename(logFilePath)
-            };
-          }
-        } catch (ffmpegError) {
-          log(`FFmpeg enhancement failed: ${ffmpegError.message}`);
-          log(`FFmpeg error stack: ${ffmpegError.stack}`);
-          return { 
-            fileName: foundVideoFile.filename,
-            logFile: path.basename(logFilePath)
-          };
-        }
-      } catch (enhancementError) {
-        log(`Video enhancement error: ${enhancementError.message}`);
-        log(`Enhancement error stack: ${enhancementError.stack}`);
-        return { 
-          fileName: foundVideoFile.filename,
-          logFile: path.basename(logFilePath)
+          logFile: path.basename(logFilePath),
+          metricsFile: path.basename(metricsFilePath)
         };
       }
     }
@@ -963,7 +899,8 @@ async function recordWebsite(url, duration = 10) {
     // Return the log file name even if there was an error
     return { 
       error: error.message,
-      logFile: path.basename(logFilePath)
+      logFile: path.basename(logFilePath),
+      metricsFile: path.basename(metricsFilePath)
     };
   } finally {
     if (browser) {

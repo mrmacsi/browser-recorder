@@ -4,7 +4,10 @@
   "main": "index.js",
   "scripts": {
     "start": "node --max-old-space-size=4096 --expose-gc index.js",
-    "dev": "NODE_ENV=development PORT=5443 nodemon --max-old-space-size=4096 --expose-gc index.js"
+    "dev": "NODE_ENV=development PORT=5443 nodemon --max-old-space-size=4096 --expose-gc index.js",
+    "monitor": "node fpsmonitor.js",
+    "monitor:dev": "NODE_ENV=development API_HOST=localhost API_PORT=5443 API_PROTOCOL=http node fpsmonitor.js",
+    "monitor:prod": "API_HOST=52.174.6.19 API_PORT=5443 API_PROTOCOL=https node fpsmonitor.js"
   },
   "keywords": [
     "puppeteer",

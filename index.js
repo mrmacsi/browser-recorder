@@ -18,6 +18,12 @@ if (!fs.existsSync(logsDir)) {
   fs.mkdirSync(logsDir, { recursive: true });
 }
 
+// Ensure metrics directory exists
+const metricsDir = path.join(__dirname, 'logs', 'metrics');
+if (!fs.existsSync(metricsDir)) {
+  fs.mkdirSync(metricsDir, { recursive: true });
+}
+
 const app = express();
 const PORT = process.env.PORT || 5443;
 const isDev = process.env.NODE_ENV !== 'production';
@@ -75,14 +81,16 @@ app.post('/api/record', async (req, res) => {
     console.log(`Recording requested for URL: ${url}, duration: ${duration || 10}s`);
     
     // Call the recorder with the URL and optional duration
-    const result = await recorder.recordWebsite(url, duration || 10);
+    const result = await recordWebsite(url, duration || 10);
     
     if (result.error) {
       return res.status(500).json({ 
         success: false, 
         error: result.error,
         logFile: result.logFile,
-        logUrl: `/api/logs/${result.logFile}`
+        logUrl: `/api/logs/${result.logFile}`,
+        metricsFile: result.metricsFile,
+        metricsUrl: `/api/metrics/${result.metricsFile}`
       });
     }
     
@@ -92,6 +100,7 @@ app.post('/api/record', async (req, res) => {
     // Get the filename from the result
     const resultFilename = fileName;
     const logFilename = result.logFile;
+    const metricsFilename = result.metricsFile;
     
     // Check if we have a valid filename
     if (!resultFilename) {
@@ -100,7 +109,8 @@ app.post('/api/record', async (req, res) => {
         success: false,
         error: 'Recording failed',
         message: 'No filename returned from recording process',
-        logFile: logFilename
+        logFile: logFilename,
+        metricsFile: metricsFilename
       });
     }
     
@@ -137,6 +147,8 @@ app.post('/api/record', async (req, res) => {
       absoluteUrl: absoluteUrl,
       logFile: logFilename,
       logUrl: `/api/logs/${logFilename}`,
+      metricsFile: metricsFilename,
+      metricsUrl: `/api/metrics/${metricsFilename}`,
       fileSize: fileSize,
       fileType: isImage ? 'image/png' : 'video/webm'
     });
@@ -290,6 +302,93 @@ app.get('/api/logs/:filename', (req, res) => {
     });
   } catch (error) {
     console.error('Error retrieving log file:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Server error',
+      message: error.message
+    });
+  }
+});
+
+// Add API endpoint to get the latest metrics file
+app.get('/api/latest-metrics', (req, res) => {
+  try {
+    // Find the latest metrics file
+    const metricFiles = fs.readdirSync(metricsDir)
+      .filter(file => file.endsWith('.log'))
+      .map(file => {
+        const filePath = path.join(metricsDir, file);
+        return {
+          name: file,
+          path: filePath,
+          time: fs.statSync(filePath).mtime.getTime()
+        };
+      })
+      .sort((a, b) => b.time - a.time); // Sort by most recent first
+    
+    if (metricFiles.length === 0) {
+      return res.status(404).json({
+        success: false,
+        error: 'No metrics files found'
+      });
+    }
+    
+    const latestMetrics = metricFiles[0];
+    const metricsContent = fs.readFileSync(latestMetrics.path, 'utf8');
+    
+    // Extract frame rate metrics
+    const frameRateLines = metricsContent.split('\n')
+      .filter(line => line.includes('FRAME_STATS') || line.includes('FRAME_METRICS'));
+    
+    res.json({
+      success: true,
+      filename: latestMetrics.name,
+      time: new Date(latestMetrics.time).toISOString(),
+      content: metricsContent,
+      frameRateMetrics: frameRateLines
+    });
+  } catch (error) {
+    console.error('Error retrieving latest metrics:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Server error',
+      message: error.message
+    });
+  }
+});
+
+// Add API endpoint to get a specific metrics file
+app.get('/api/metrics/:filename', (req, res) => {
+  try {
+    const filename = req.params.filename;
+    const metricsPath = path.join(metricsDir, filename);
+    
+    // Check if file exists and ensure it's a log file for security
+    if (!fs.existsSync(metricsPath) || !filename.endsWith('.log')) {
+      return res.status(404).json({
+        success: false,
+        error: 'Metrics file not found',
+        message: 'The requested metrics file does not exist or is not a valid log'
+      });
+    }
+    
+    // Read the metrics file
+    const metricsContent = fs.readFileSync(metricsPath, 'utf8');
+    
+    // Extract frame rate metrics
+    const frameRateLines = metricsContent.split('\n')
+      .filter(line => line.includes('FRAME_STATS') || line.includes('FRAME_METRICS'));
+    
+    // Return the metrics content
+    res.json({
+      success: true,
+      filename: filename,
+      time: fs.statSync(metricsPath).mtime.toISOString(),
+      content: metricsContent,
+      frameRateMetrics: frameRateLines
+    });
+  } catch (error) {
+    console.error('Error retrieving metrics file:', error);
     res.status(500).json({
       success: false,
       error: 'Server error',
