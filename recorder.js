@@ -212,8 +212,24 @@ if (isLinux && !fs.existsSync('/mnt/ramdisk')) {
   }
 }
 
-const tempDir = useRamDisk ? (fs.existsSync('/mnt/ramdisk') ? '/mnt/ramdisk' : os.tmpdir()) : os.tmpdir();
-console.log(`[DEBUG] Using temp directory: ${tempDir} (RAM-based: ${useRamDisk})`);
+// Use Azure temp SSD if available
+const azureTempSsd = '/mnt/resource/browser-recorder/temp';
+// Check if Azure temp SSD exists and create it if not
+if (isLinux && !fs.existsSync(azureTempSsd)) {
+  try {
+    console.log(`[DEBUG] Creating Azure temp SSD directory: ${azureTempSsd}`);
+    fs.mkdirSync(azureTempSsd, { recursive: true });
+    execSync(`chmod 777 ${azureTempSsd}`, { stdio: 'inherit' });
+    console.log(`[DEBUG] Created Azure temp SSD directory with proper permissions`);
+  } catch (error) {
+    console.warn(`[DEBUG] Failed to create Azure temp SSD directory: ${error.message}`);
+  }
+}
+
+// Choose optimal temp directory: Azure temp SSD > RAM disk > system temp
+const tempDir = fs.existsSync(azureTempSsd) ? azureTempSsd : 
+               (useRamDisk && fs.existsSync('/mnt/ramdisk') ? '/mnt/ramdisk' : os.tmpdir());
+console.log(`[DEBUG] Using temp directory: ${tempDir} (RAM-based: ${useRamDisk}, Azure SSD: ${fs.existsSync(azureTempSsd)})`);
 console.log(`[DEBUG] Temp directory permissions:`);
 try {
   execSync(`ls -la ${tempDir}`, { stdio: 'inherit' });
@@ -243,11 +259,11 @@ try {
 }
 
 // Configure video optimization based on system resources
-const VIDEO_FPS = 60; // Increased to 60fps for smoother playback
+const VIDEO_FPS = 30; // Reduced from 60 to 30
 const TARGET_FPS = 30; // Target FPS we aim to achieve at minimum
 const ACTIVITY_DELAY = 100; // Reduced delay for even smoother activity (was 150)
-const VIDEO_WIDTH = 1920; // Always use full HD
-const VIDEO_HEIGHT = 1080; // Always use full HD
+const VIDEO_WIDTH = 1280; // Reduced from 1920 to 1280
+const VIDEO_HEIGHT = 720; // Reduced from 1080 to 720
 const FFMPEG_PATH = process.env.FFMPEG_PATH || 'ffmpeg';
 // Always try to use hardware acceleration when available, regardless of environment
 const USE_HARDWARE_ACCELERATION = process.env.HARDWARE_ACCELERATION === 'true' || process.env.NODE_ENV === 'development';
@@ -601,7 +617,10 @@ async function recordWebsite(url, duration = 10) {
       // Memory optimization
       '--single-process', // More performant for recording only
       '--renderer-process-limit=1',
-      '--disable-default-apps'
+      '--disable-default-apps',
+      // Additional optimizations 
+      '--disable-software-rasterizer',
+      '--disable-features=BlinkGenPropertyTrees'
     ];
     
     // Add hardware acceleration flags if available and in development mode
@@ -615,6 +634,7 @@ async function recordWebsite(url, duration = 10) {
         '--enable-native-gpu-memory-buffers',
         '--enable-gpu-compositing',
         '--enable-oop-rasterization',
+        '--use-gl=egl',  // Use EGL for hardware acceleration
         '--ignore-gpu-blocklist'
       );
     } else {
@@ -1025,10 +1045,10 @@ async function recordWebsite(url, duration = 10) {
           // Optimize ffmpeg parameters based on the frame rate we achieved
           if (isDev) {
             // Fast mode for development - speed over quality, but still decent
-            ffmpegCmd = `${FFMPEG_PATH} -y ${hwAccelParams}-i "${originalPath}" -c:v libvpx-vp9 -b:v 4M ${achievedGoodFps ? '-deadline realtime' : '-deadline good'} -cpu-used ${achievedGoodFps ? '8' : '4'} -pix_fmt yuv420p -quality ${achievedGoodFps ? 'realtime' : 'good'} -crf ${achievedGoodFps ? '30' : '26'} -speed ${achievedGoodFps ? '8' : '6'} -tile-columns 6 -frame-parallel 1 -threads ${numCPUs} "${enhancedPath}"`;
+            ffmpegCmd = `${FFMPEG_PATH} -y ${hwAccelParams}-i "${originalPath}" -c:v libvpx-vp9 -b:v 2M ${achievedGoodFps ? '-deadline realtime' : '-deadline realtime'} -cpu-used ${achievedGoodFps ? '8' : '8'} -pix_fmt yuv420p -quality ${achievedGoodFps ? 'realtime' : 'realtime'} -crf ${achievedGoodFps ? '36' : '36'} -speed ${achievedGoodFps ? '8' : '8'} -tile-columns 6 -frame-parallel 1 -threads 6 "${enhancedPath}"`;
           } else {
             // Balanced mode for production - good quality with reasonable speed
-            ffmpegCmd = `${FFMPEG_PATH} -y ${hwAccelParams}-i "${originalPath}" -c:v libvpx-vp9 -b:v 6M -deadline ${achievedGoodFps ? 'good' : 'best'} -cpu-used ${achievedGoodFps ? '4' : '2'} -pix_fmt yuv420p -quality good -crf ${achievedGoodFps ? '22' : '18'} -speed ${achievedGoodFps ? '3' : '2'} -tile-columns 4 -frame-parallel 1 -threads ${numCPUs} "${enhancedPath}"`;
+            ffmpegCmd = `${FFMPEG_PATH} -y ${hwAccelParams}-i "${originalPath}" -c:v libvpx-vp9 -b:v 2M -deadline ${achievedGoodFps ? 'realtime' : 'realtime'} -cpu-used ${achievedGoodFps ? '8' : '8'} -pix_fmt yuv420p -quality realtime -crf ${achievedGoodFps ? '36' : '36'} -speed ${achievedGoodFps ? '8' : '8'} -tile-columns 4 -frame-parallel 1 -threads 6 "${enhancedPath}"`;
           }
           
           // Add frame rate info to the log

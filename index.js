@@ -470,6 +470,70 @@ app.get('/api/metrics', (req, res) => {
   }
 });
 
+// Add API endpoint to get the latest frame rates from metrics
+app.get('/api/frame-rates', (req, res) => {
+  try {
+    // Get metrics directory
+    const metricsDir = path.join(__dirname, 'logs', 'metrics');
+    if (!fs.existsSync(metricsDir)) {
+      return res.status(404).json({
+        success: false,
+        error: 'Metrics directory not found'
+      });
+    }
+    
+    // Read the metrics directory for the most recent files
+    const files = fs.readdirSync(metricsDir)
+      .filter(file => file.endsWith('.log'))
+      .map(file => {
+        const filePath = path.join(metricsDir, file);
+        return {
+          name: file,
+          path: filePath,
+          time: fs.statSync(filePath).mtime.getTime()
+        };
+      })
+      .sort((a, b) => b.time - a.time); // Sort by most recent first
+    
+    // Take the 5 most recent metrics files
+    const recentFiles = files.slice(0, 5);
+    const frameRateData = [];
+    
+    // Extract frame rate metrics from each file
+    recentFiles.forEach(file => {
+      try {
+        const fileContent = fs.readFileSync(file.path, 'utf8');
+        const frameRateLines = fileContent.split('\n')
+          .filter(line => line.includes('FRAME_STATS') || line.includes('FPS='));
+        
+        if (frameRateLines.length > 0) {
+          frameRateData.push({
+            file: file.name,
+            time: new Date(file.time).toISOString(),
+            metrics: frameRateLines
+          });
+        }
+      } catch (readError) {
+        console.error(`Error reading metrics file ${file.name}: ${readError.message}`);
+      }
+    });
+    
+    // Return the frame rate data
+    res.json({
+      success: true,
+      count: frameRateData.length,
+      frameRates: frameRateData
+    });
+  } catch (error) {
+    console.error('Error retrieving frame rates:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Server error',
+      message: error.message
+    });
+  }
+});
+
 // Create server based on environment
 let server;
 
