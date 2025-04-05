@@ -74,6 +74,66 @@ LOCATION="westeurope"
 IMAGE="Canonical:0001-com-ubuntu-server-focal:20_04-lts:latest"  # Ubuntu 20.04 LTS
 REPO_URL="https://github.com/mrmacsi/browser-recorder.git"  # Change to your Git repository URL
 
+# Extract the core count from the VM size
+CORE_COUNT=0
+case "$VM_SIZE" in
+    Standard_B1s|Standard_B1ms) CORE_COUNT=1 ;;
+    Standard_B2s|Standard_B2ms|Standard_D2s_v3|Standard_E2s_v3|Standard_F2s_v2) CORE_COUNT=2 ;;
+    Standard_B4ms|Standard_D4s_v3|Standard_E4s_v3|Standard_F4s_v2) CORE_COUNT=4 ;;
+    Standard_B8ms|Standard_D8s_v3|Standard_E8s_v3|Standard_F8s_v2) CORE_COUNT=8 ;;
+    Standard_D16s_v3) CORE_COUNT=16 ;;
+    *) CORE_COUNT=4 ;;  # Default assumption
+esac
+
+# Check subscription quota for the selected location and VM size
+echo "Checking your subscription quota for cores in $LOCATION..."
+QUOTA_INFO=$(az vm list-usage --location "$LOCATION" --query "[?name.value=='cores']" -o json)
+CURRENT_USAGE=$(echo $QUOTA_INFO | jq -r '.[0].currentValue')
+QUOTA_LIMIT=$(echo $QUOTA_INFO | jq -r '.[0].limit')
+
+echo "Current core usage: $CURRENT_USAGE"
+echo "Core quota limit: $QUOTA_LIMIT"
+echo "Required cores for $VM_SIZE: $CORE_COUNT"
+
+# Check if we have enough quota
+if (( CORE_COUNT > QUOTA_LIMIT )); then
+    echo "ERROR: Your subscription does not have enough core quota to create this VM."
+    echo "You need at least $CORE_COUNT cores, but your limit is $QUOTA_LIMIT cores."
+    echo ""
+    echo "You have the following options:"
+    echo "1. Request a quota increase from Azure portal:"
+    echo "   https://aka.ms/ProdportalCRP/#blade/Microsoft_Azure_Capacity/UsageAndQuota.ReactView"
+    echo "2. Select a smaller VM size that fits within your quota."
+    echo "3. Try a different Azure region that might have higher quota."
+    echo ""
+    
+    read -p "Would you like to continue with a smaller VM that fits your quota? (y/n): " CONTINUE_SMALLER
+    
+    if [[ "$CONTINUE_SMALLER" == "y" || "$CONTINUE_SMALLER" == "Y" ]]; then
+        echo "Selecting the largest VM size that fits within your quota..."
+        
+        if (( QUOTA_LIMIT >= 8 )); then
+            VM_SIZE="Standard_D8s_v3"
+            echo "Selected Standard_D8s_v3 (8 vCPU, 32 GB RAM)"
+        elif (( QUOTA_LIMIT >= 4 )); then
+            VM_SIZE="Standard_D4s_v3"
+            echo "Selected Standard_D4s_v3 (4 vCPU, 16 GB RAM)"
+        elif (( QUOTA_LIMIT >= 2 )); then
+            VM_SIZE="Standard_D2s_v3"
+            echo "Selected Standard_D2s_v3 (2 vCPU, 8 GB RAM)"
+        elif (( QUOTA_LIMIT >= 1 )); then
+            VM_SIZE="Standard_B1ms"
+            echo "Selected Standard_B1ms (1 vCPU, 2 GB RAM)"
+        else
+            echo "Your quota is too low to create any VM. Please request a quota increase."
+            exit 1
+        fi
+    else
+        echo "Operation cancelled. Please request a quota increase or try a different region."
+        exit 1
+    fi
+fi
+
 # Create resource group if it doesn't exist
 echo "Creating resource group $RESOURCE_GROUP in $LOCATION..."
 az group create --name "$RESOURCE_GROUP" --location "$LOCATION"
