@@ -3,6 +3,7 @@ const cors = require('cors');
 const path = require('path');
 const fs = require('fs');
 const { recordWebsite } = require('./recorder');
+const http = require('http');
 const https = require('https');
 
 // Ensure uploads directory exists
@@ -12,10 +13,12 @@ if (!fs.existsSync(uploadsDir)) {
 }
 
 const app = express();
+const PORT = process.env.PORT || 7777;
 const HTTPS_PORT = process.env.HTTPS_PORT || 5443;
+const isDev = process.env.NODE_ENV !== 'production';
 
 // Enable CORS for development
-if (process.env.NODE_ENV !== 'production') {
+if (isDev) {
   console.log('Running in development mode - CORS enabled for all origins');
   app.use(cors());
 } else {
@@ -182,46 +185,121 @@ app.get('/api/files', (req, res) => {
   }
 });
 
-// Setup SSL certificates for HTTPS
-let httpsServer;
-try {
-  // Try to read SSL certificates if available
-  const privateKeyPath = process.env.SSL_KEY_PATH || '/etc/ssl/browser-recorder/privkey.pem';
-  const certificatePath = process.env.SSL_CERT_PATH || '/etc/ssl/browser-recorder/cert.pem';
-  
-  if (fs.existsSync(privateKeyPath) && fs.existsSync(certificatePath)) {
-    const privateKey = fs.readFileSync(privateKeyPath, 'utf8');
-    const certificate = fs.readFileSync(certificatePath, 'utf8');
-    const credentials = { key: privateKey, cert: certificate };
+// Delete a specific recording file
+app.delete('/api/files/:filename', (req, res) => {
+  try {
+    const filename = req.params.filename;
+    const filePath = path.join(uploadsDir, filename);
     
-    // Create HTTPS server with the certificates
-    httpsServer = https.createServer(credentials, app);
-    console.log('SSL certificates loaded successfully');
-  } else {
-    console.error('SSL certificates not found. HTTPS server cannot start.');
-    console.error(`Looked for certificates at: ${privateKeyPath} and ${certificatePath}`);
-    process.exit(1);
+    // Check if file exists and ensure it's a webm file for security
+    if (!fs.existsSync(filePath) || !filename.endsWith('.webm')) {
+      return res.status(404).json({
+        success: false,
+        error: 'File not found',
+        message: 'The requested file does not exist or is not a valid recording'
+      });
+    }
+    
+    // Delete the file
+    fs.unlinkSync(filePath);
+    console.log(`Deleted file: ${filename}`);
+    
+    res.json({
+      success: true,
+      message: 'File deleted successfully',
+      filename: filename
+    });
+  } catch (error) {
+    console.error('Error deleting file:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Server error',
+      message: error.message
+    });
   }
-} catch (error) {
-  console.error('Error loading SSL certificates:', error.message);
-  console.error('HTTPS server cannot start. Exiting...');
-  process.exit(1);
+});
+
+// Create HTTP server
+const httpServer = http.createServer(app);
+
+// Setup HTTPS server if not in development mode
+let httpsServer;
+if (!isDev) {
+  try {
+    // Try to read SSL certificates if available
+    const privateKeyPath = process.env.SSL_KEY_PATH || path.join(__dirname, 'ssl', 'privkey.pem');
+    const certificatePath = process.env.SSL_CERT_PATH || path.join(__dirname, 'ssl', 'cert.pem');
+    
+    if (fs.existsSync(privateKeyPath) && fs.existsSync(certificatePath)) {
+      const privateKey = fs.readFileSync(privateKeyPath, 'utf8');
+      const certificate = fs.readFileSync(certificatePath, 'utf8');
+      const credentials = { key: privateKey, cert: certificate };
+      
+      // Create HTTPS server with the certificates
+      httpsServer = https.createServer(credentials, app);
+      console.log('SSL certificates loaded successfully');
+    } else {
+      console.error('SSL certificates not found. HTTPS server cannot start.');
+      console.error(`Looked for certificates at: ${privateKeyPath} and ${certificatePath}`);
+      // Don't exit in production - we'll try to run HTTP server instead
+    }
+  } catch (error) {
+    console.error('Error loading SSL certificates:', error.message);
+    console.error('HTTPS server will not be started');
+  }
 }
 
-// Start HTTPS server
-httpsServer.listen(HTTPS_PORT, () => {
-  console.log(`HTTPS Server running on port ${HTTPS_PORT}`);
-});
+// Start the appropriate server based on environment
+if (isDev) {
+  // Development mode - always use HTTP
+  console.log('Starting HTTP server in development mode (No SSL required)');
+  const startServer = (port) => {
+    httpServer.listen(port)
+      .on('error', (err) => {
+        if (err.code === 'EADDRINUSE') {
+          // If port is in use, try a different port
+          console.warn(`Port ${port} is already in use, trying ${port + 1}...`);
+          startServer(port + 1);
+        } else {
+          console.error('Server error:', err);
+        }
+      })
+      .on('listening', () => {
+        const address = httpServer.address();
+        console.log(`HTTP Server running on port ${address.port}`);
+      });
+  };
+  
+  startServer(PORT);
+} else {
+  // Production mode - prefer HTTPS, fallback to HTTP
+  if (httpsServer) {
+    httpsServer.listen(HTTPS_PORT, () => {
+      console.log(`HTTPS Server running on port ${HTTPS_PORT}`);
+    });
+  } else {
+    // Fallback to HTTP in production if HTTPS setup failed
+    httpServer.listen(PORT, () => {
+      console.log(`HTTP Server running on port ${PORT} (SSL setup failed)`);
+    });
+  }
+}
 
 // Handle graceful shutdown
 process.on('SIGTERM', () => {
   console.log('SIGTERM received, shutting down gracefully');
-  httpsServer.close(() => console.log('HTTPS server closed'));
+  httpServer.close(() => console.log('HTTP server closed'));
+  if (httpsServer) {
+    httpsServer.close(() => console.log('HTTPS server closed'));
+  }
   process.exit(0);
 });
 
 process.on('SIGINT', () => {
   console.log('SIGINT received, shutting down gracefully');
-  httpsServer.close(() => console.log('HTTPS server closed'));
+  httpServer.close(() => console.log('HTTP server closed'));
+  if (httpsServer) {
+    httpsServer.close(() => console.log('HTTPS server closed'));
+  }
   process.exit(0);
 }); 

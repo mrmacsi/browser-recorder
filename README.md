@@ -19,6 +19,13 @@ cd browser-recorder
 # Install dependencies
 npm install
 
+# Install Playwright Chromium
+npx playwright install chromium
+
+# Create SSL certificates for local development
+mkdir -p ssl
+openssl req -x509 -nodes -days 365 -newkey rsa:2048 -keyout ssl/privkey.pem -out ssl/cert.pem -subj "/CN=localhost" -addext "subjectAltName = IP:127.0.0.1"
+
 # Run the installation script (for server deployment)
 chmod +x install.sh
 ./install.sh
@@ -29,7 +36,7 @@ chmod +x install.sh
 ### Record a website
 
 ```bash
-curl -X POST https://localhost:5443/api/record \
+curl -k -X POST https://localhost:5443/api/record \
   -H "Content-Type: application/json" \
   -d '{"url": "https://example.com", "duration": 10}'
 ```
@@ -38,6 +45,12 @@ curl -X POST https://localhost:5443/api/record \
 
 ```bash
 curl -k https://localhost:5443/api/health
+```
+
+### List recorded videos
+
+```bash
+curl -k https://localhost:5443/api/files
 ```
 
 ## Development
