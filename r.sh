@@ -15,6 +15,9 @@ ssh $VM_USER@$VM_IP << EOF
   echo "Pulling latest changes from git..."
   git pull
   
+  echo "Ensuring logs directory exists..."
+  mkdir -p $PROJECT_DIR/logs
+  
   echo "Checking if PM2 is running the application..."
   if pm2 list | grep -q "browser-recorder"; then
     echo "Restarting application with PM2..."

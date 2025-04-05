@@ -5,6 +5,34 @@ const fs = require('fs');
 const os = require('os');
 const { execSync } = require('child_process');
 
+// Create logs directory if it doesn't exist
+const logsDir = path.resolve(__dirname, 'logs');
+if (!fs.existsSync(logsDir)) {
+  fs.mkdirSync(logsDir, { recursive: true });
+}
+
+// Function to create a logger for a specific recording session
+function createSessionLogger(sessionId) {
+  const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+  const logFilePath = path.join(logsDir, `recording-${sessionId}-${timestamp}.log`);
+  
+  // Create a write stream for the log file
+  const logStream = fs.createWriteStream(logFilePath, { flags: 'a' });
+  
+  // Create a logger function that writes to both console and log file
+  const logger = (message) => {
+    const timestampedMessage = `[${new Date().toISOString()}] ${message}`;
+    console.log(timestampedMessage);
+    logStream.write(timestampedMessage + '\n');
+  };
+  
+  // Return the logger function and file path
+  return { 
+    log: logger,
+    logFilePath
+  };
+}
+
 // Determine optimal CPU and memory settings
 const numCPUs = os.cpus().length;
 const totalMem = Math.floor(os.totalmem() / (1024 * 1024 * 1024)); // GB
@@ -279,41 +307,50 @@ function isValidForFfmpeg(file) {
 }
 
 async function recordWebsite(url, duration = 10) {
-  console.log(`[DEBUG] Preparing to record ${url} for ${duration} seconds with Playwright...`);
+  // Generate a session ID for this recording
+  const sessionId = uuidv4().substr(0, 8);
+  
+  // Create a logger for this session
+  const { log, logFilePath } = createSessionLogger(sessionId);
+  
+  log(`Starting recording session ${sessionId} for ${url} with duration ${duration}s`);
+  log(`System info: ${numCPUs} CPU cores, ${totalMem}GB RAM, Platform: ${os.platform()}, Release: ${os.release()}`);
+  log(`Free memory: ${Math.floor(os.freemem() / (1024 * 1024))}MB`);
   
   // Double-check that uploads directory exists
   if (!fs.existsSync(uploadsDir)) {
-    console.log(`[DEBUG] Uploads directory does not exist, creating it now...`);
+    log(`Uploads directory does not exist, creating it now...`);
     try {
       fs.mkdirSync(uploadsDir, { recursive: true });
-      console.log(`[DEBUG] Upload directory created`);
+      log(`Upload directory created`);
     } catch (mkdirError) {
-      console.error(`[DEBUG] Failed to create uploads directory: ${mkdirError.message}`);
+      log(`Failed to create uploads directory: ${mkdirError.message}`);
       throw new Error(`Cannot create uploads directory: ${mkdirError.message}`);
     }
   }
   
-  console.log('[DEBUG] Checking directory permissions:');
+  log('Checking directory permissions:');
   try {
     execSync(`ls -la ${__dirname}`, { stdio: 'inherit' });
   } catch (error) {
-    console.warn(`[DEBUG] Could not list directory permissions: ${error.message}`);
+    log(`Could not list directory permissions: ${error.message}`);
   }
   
   // Ensure browsers are installed before proceeding
   try {
     await ensureBrowsersInstalled();
+    log('Browser installation check completed successfully');
   } catch (browserInstallError) {
-    console.error(`[DEBUG] Failed to ensure browsers are installed: ${browserInstallError.message}`);
+    log(`Failed to ensure browsers are installed: ${browserInstallError.message}`);
     throw browserInstallError;
   }
   
   // Generate a proper filename for this recording
   const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-  const recordingId = uuidv4().substr(0, 8);
+  const recordingId = sessionId;
   const videoFilename = `recording-${recordingId}-${timestamp}.webm`;
   const videoPath = path.join(uploadsDir, videoFilename);
-  console.log(`[DEBUG] Generated recording filename: ${videoFilename}`);
+  log(`Generated recording filename: ${videoFilename}`);
   
   // Create a fallback screenshot in case video recording fails
   const screenshotFilename = `screenshot-${recordingId}-${timestamp}.png`;
@@ -369,8 +406,8 @@ async function recordWebsite(url, duration = 10) {
       console.warn(`[DEBUG] Could not get Playwright version: ${error.message}`);
     }
     
-    console.log(`[DEBUG] Launching browser with ${browserArgs.length} arguments`);
-    console.log(`[DEBUG] Browser args: ${browserArgs.join(' ')}`);
+    log(`Launching browser with ${browserArgs.length} arguments`);
+    log(`Browser args: ${browserArgs.join(' ')}`);
     
     const launchOptions = {
       headless: true,
@@ -380,12 +417,12 @@ async function recordWebsite(url, duration = 10) {
       args: browserArgs
     };
     
-    console.log(`[DEBUG] Browser launch options: ${JSON.stringify(launchOptions, null, 2)}`);
+    log(`Browser launch options: ${JSON.stringify(launchOptions, null, 2)}`);
     browser = await chromium.launch(launchOptions);
-    console.log('[DEBUG] Browser launched successfully');
+    log('Browser launched successfully');
   } catch (error) {
-    console.error(`[DEBUG] Failed to launch browser: ${error.message}`);
-    console.error(`[DEBUG] Error stack: ${error.stack}`);
+    log(`Failed to launch browser: ${error.message}`);
+    log(`Error stack: ${error.stack}`);
     if (error.message.includes("Executable doesn't exist")) {
       throw new Error(
         "Playwright browser not found. Please run 'npx playwright install' to download the required browsers."
@@ -395,7 +432,7 @@ async function recordWebsite(url, duration = 10) {
   }
 
   try {
-    console.log('[DEBUG] Creating browser context with video recording enabled');
+    log('Creating browser context with video recording enabled');
     // Create a browser context with video recording enabled with improved settings
     const contextOptions = {
       viewport: { width: VIDEO_WIDTH, height: VIDEO_HEIGHT },
@@ -416,20 +453,20 @@ async function recordWebsite(url, duration = 10) {
       }
     };
     
-    console.log(`[DEBUG] Browser context options: ${JSON.stringify(contextOptions, null, 2)}`);
+    log(`Browser context options: ${JSON.stringify(contextOptions, null, 2)}`);
     const context = await browser.newContext(contextOptions);
-    console.log('[DEBUG] Browser context created successfully');
+    log('Browser context created successfully');
 
     // Force garbage collection to free memory before recording
     try {
       if (global.gc) {
         global.gc();
-        console.log('[DEBUG] Forced garbage collection before recording');
+        log('Forced garbage collection before recording');
       } else {
-        console.log('[DEBUG] Garbage collection not available (Node.js needs --expose-gc flag)');
+        log('Garbage collection not available (Node.js needs --expose-gc flag)');
       }
     } catch (e) {
-      console.log(`[DEBUG] Could not force garbage collection: ${e.message}`);
+      log(`Could not force garbage collection: ${e.message}`);
     }
 
     // Optimize context performance
@@ -437,9 +474,9 @@ async function recordWebsite(url, duration = 10) {
     context.setDefaultTimeout(20000);
     
     // Create a new page
-    console.log('[DEBUG] Creating new page');
+    log('Creating new page');
     const page = await context.newPage();
-    console.log('[DEBUG] Page created successfully');
+    log('Page created successfully');
     
     // Flag to track if we have any successful content
     let hasContent = false;
@@ -449,29 +486,29 @@ async function recordWebsite(url, duration = 10) {
     try {
       await page.screenshot({ path: screenshotPath });
       screenshotTaken = true;
-      console.log(`[DEBUG] Fallback screenshot saved to ${screenshotPath}`);
+      log(`Fallback screenshot saved to ${screenshotPath}`);
     } catch (screenshotError) {
-      console.error(`[DEBUG] Failed to take fallback screenshot: ${screenshotError.message}`);
+      log(`Failed to take fallback screenshot: ${screenshotError.message}`);
     }
     
-    console.log(`[DEBUG] Loading page: ${url}`);
+    log(`Loading page: ${url}`);
     try {
       // Navigate to the URL with optimized wait conditions
-      console.log('[DEBUG] Navigating to URL with networkidle wait condition');
+      log('Navigating to URL with networkidle wait condition');
       const navigationResponse = await page.goto(url, { 
         waitUntil: 'networkidle', // Wait for network to be idle for better content loading
         timeout: 60000 // Increased timeout for more complete loading
       });
       
-      console.log(`[DEBUG] Navigation status: ${navigationResponse ? navigationResponse.status() : 'No response'}`);
-      console.log(`[DEBUG] Navigation URL: ${navigationResponse ? navigationResponse.url() : 'No response'}`);
+      log(`Navigation status: ${navigationResponse ? navigationResponse.status() : 'No response'}`);
+      log(`Navigation URL: ${navigationResponse ? navigationResponse.url() : 'No response'}`);
       
       // Allow page to fully render
-      console.log('[DEBUG] Waiting 1 second for page to render');
+      log('Waiting 1 second for page to render');
       await page.waitForTimeout(1000);
       
       // Check page content
-      console.log('[DEBUG] Page title:', await page.title());
+      log(`Page title: ${await page.title()}`);
       if (await page.title()) {
         hasContent = true;
       }
@@ -480,14 +517,14 @@ async function recordWebsite(url, duration = 10) {
       try {
         const screenshotPath = path.join(uploadsDir, `debug-screenshot-${Date.now()}.png`);
         await page.screenshot({ path: screenshotPath });
-        console.log(`[DEBUG] Saved debug screenshot to ${screenshotPath}`);
+        log(`Saved debug screenshot to ${screenshotPath}`);
       } catch (screenshotError) {
-        console.error(`[DEBUG] Failed to take screenshot: ${screenshotError.message}`);
+        log(`Failed to take screenshot: ${screenshotError.message}`);
       }
       
       // Add some initial interactivity to make sure the video has content
       if (!DISABLE_PAGE_ACTIVITY) {
-        console.log(`[DEBUG] Generating initial page activity...`);
+        log(`Generating initial page activity...`);
         // Generate activity for longer duration to ensure recording works
         await generatePageActivity(page, 5000);
         hasContent = true;
@@ -495,30 +532,30 @@ async function recordWebsite(url, duration = 10) {
         // Wait for the remainder of the recording time
         const remainingTime = (duration * 1000) - 5000;
         if (remainingTime > 0) {
-          console.log(`[DEBUG] Waiting for the remaining recording time (${remainingTime}ms)...`);
+          log(`Waiting for the remaining recording time (${remainingTime}ms)...`);
           await page.waitForTimeout(remainingTime);
         }
       } else {
-        console.log(`[DEBUG] Page activity disabled, recording page as-is...`);
+        log(`Page activity disabled, recording page as-is...`);
         // Wait for the full recording time
         await page.waitForTimeout(duration * 1000);
       }
       
     } catch (navigationError) {
-      console.warn(`[DEBUG] Navigation issue: ${navigationError.message}`);
-      console.warn(`[DEBUG] Navigation error stack: ${navigationError.stack}`);
+      log(`Navigation issue: ${navigationError.message}`);
+      log(`Navigation error stack: ${navigationError.stack}`);
       // Continue with recording anyway - we'll record whatever is on the page
     }
     
     // Ensure recording had enough activity to be valid
-    console.log(`[DEBUG] Recording completed after ${duration} seconds`);
+    log(`Recording completed after ${duration} seconds`);
     
     // End the recording by closing the page and context
-    console.log('[DEBUG] Closing page to end recording');
+    log('Closing page to end recording');
     await page.close();
-    console.log(`[DEBUG] Page closed, waiting for video to be saved...`);
+    log(`Page closed, waiting for video to be saved...`);
     const recordedVideoPath = await context.close();
-    console.log(`[DEBUG] Context closed, video path: ${recordedVideoPath || 'undefined'}`);
+    log(`Context closed, video path: ${recordedVideoPath || 'undefined'}`);
     
     // Look for the most recently created video file
     let foundVideoFile;
@@ -528,49 +565,49 @@ async function recordWebsite(url, duration = 10) {
                                    fs.statSync(recordedVideoPath).size > 10000;
     
     if (videoRecordingSuccessful) {
-      console.log(`[DEBUG] Video recording successful! Path: ${recordedVideoPath}, Size: ${fs.statSync(recordedVideoPath).size} bytes`);
+      log(`Video recording successful! Path: ${recordedVideoPath}, Size: ${fs.statSync(recordedVideoPath).size} bytes`);
     } else {
-      console.log(`[DEBUG] Video recording failed or produced invalid file: ${recordedVideoPath || 'undefined'}`);
+      log(`Video recording failed or produced invalid file: ${recordedVideoPath || 'undefined'}`);
       if (recordedVideoPath && fs.existsSync(recordedVideoPath)) {
-        console.log(`[DEBUG] Video file exists but size is only ${fs.statSync(recordedVideoPath).size} bytes`);
+        log(`Video file exists but size is only ${fs.statSync(recordedVideoPath).size} bytes`);
       }
     }
     
     // Debug what's in the temp directory
-    console.log(`[DEBUG] Contents of temp directory (${tempDir}):`);
+    log(`Contents of temp directory (${tempDir}):`);
     try {
       execSync(`ls -la ${tempDir}`, { stdio: 'inherit' });
     } catch (error) {
-      console.warn(`[DEBUG] Could not list temp directory contents: ${error.message}`);
+      log(`Could not list temp directory contents: ${error.message}`);
     }
     
     // If using RAM disk and video recording was successful, copy the file to uploads directory
     if (useRamDisk && videoRecordingSuccessful) {
       const destFile = path.join(uploadsDir, path.basename(recordedVideoPath));
-      console.log(`[DEBUG] Copying video from temp directory: ${recordedVideoPath} to ${destFile}`);
+      log(`Copying video from temp directory: ${recordedVideoPath} to ${destFile}`);
       try {
         fs.copyFileSync(recordedVideoPath, destFile);
-        console.log(`[DEBUG] File copy succeeded`);
+        log(`File copy succeeded`);
         
         try {
           fs.unlinkSync(recordedVideoPath); // Remove the temp file
-          console.log(`[DEBUG] Removed temp file: ${recordedVideoPath}`);
+          log(`Removed temp file: ${recordedVideoPath}`);
         } catch (unlinkError) {
-          console.warn(`[DEBUG] Failed to remove temp file: ${unlinkError.message}`);
+          log(`Failed to remove temp file: ${unlinkError.message}`);
         }
         
         const fileSize = fs.statSync(destFile).size;
-        console.log(`[DEBUG] Destination file size: ${fileSize} bytes`);
+        log(`Destination file size: ${fileSize} bytes`);
         
         foundVideoFile = {
           filename: path.basename(destFile),
           path: destFile,
           size: fileSize
         };
-        console.log(`[DEBUG] Video copied successfully, size: ${foundVideoFile.size} bytes`);
+        log(`Video copied successfully, size: ${foundVideoFile.size} bytes`);
       } catch (copyError) {
-        console.error(`[DEBUG] File copy failed: ${copyError.message}`);
-        console.error(`[DEBUG] Copy error stack: ${copyError.stack}`);
+        log(`File copy failed: ${copyError.message}`);
+        log(`Copy error stack: ${copyError.stack}`);
         videoRecordingSuccessful = false;
       }
     } else if (!useRamDisk && videoRecordingSuccessful) {
@@ -580,66 +617,84 @@ async function recordWebsite(url, duration = 10) {
         path: recordedVideoPath,
         size: fs.statSync(recordedVideoPath).size
       };
-      console.log(`[DEBUG] Using direct video file: ${foundVideoFile.filename}, size: ${foundVideoFile.size} bytes`);
+      log(`Using direct video file: ${foundVideoFile.filename}, size: ${foundVideoFile.size} bytes`);
     } else {
       // Try to find any valid recording in the uploads directory
-      console.log(`[DEBUG] Looking for recording in uploads directory: ${uploadsDir}`);
+      log(`Looking for recording in uploads directory: ${uploadsDir}`);
       foundVideoFile = findPlaywrightRecording(uploadsDir);
     }
     
-    console.log(`[DEBUG] Video file found: ${foundVideoFile ? 'yes' : 'no'}`);
+    log(`Video file found: ${foundVideoFile ? 'yes' : 'no'}`);
     
     // Handle the case where no video was found
     if (!foundVideoFile || foundVideoFile.size < 10000) {
-      console.warn(`[DEBUG] No valid video was produced by Playwright or file is too small`);
+      log(`No valid video was produced by Playwright or file is too small`);
       
       // Return the screenshot if it was taken successfully
       if (screenshotTaken && fs.existsSync(screenshotPath)) {
-        console.log(`[DEBUG] Returning screenshot instead of video: ${screenshotFilename}`);
-        return screenshotFilename;
+        log(`Returning screenshot instead of video: ${screenshotFilename}`);
+        return { 
+          fileName: screenshotFilename,
+          logFile: path.basename(logFilePath)
+        };
       }
       
       // Create a video placeholder with the proper naming scheme
-      console.log(`[DEBUG] Creating placeholder video file: ${videoFilename}`);
+      log(`Creating placeholder video file: ${videoFilename}`);
       try {
         fs.writeFileSync(videoPath, "NO_VIDEO_RECORDED");
-        console.log(`[DEBUG] Created placeholder file at ${videoPath}`);
+        log(`Created placeholder file at ${videoPath}`);
         
         // Return proper video filename for better UX
-        return videoFilename;
+        return { 
+          fileName: videoFilename,
+          logFile: path.basename(logFilePath)
+        };
       } catch (writeError) {
-        console.error(`[DEBUG] Failed to write placeholder file: ${writeError.message}`);
+        log(`Failed to write placeholder file: ${writeError.message}`);
         
         // Last resort fallback: generate a blank file with proper naming
         const fallbackFilename = `video-fallback-${recordingId}.webm`;
         const fallbackPath = path.join(uploadsDir, fallbackFilename);
         try {
           fs.writeFileSync(fallbackPath, "VIDEO_RECORDING_FAILED");
-          console.log(`[DEBUG] Created fallback placeholder: ${fallbackFilename}`);
-          return fallbackFilename;
+          log(`Created fallback placeholder: ${fallbackFilename}`);
+          return { 
+            fileName: fallbackFilename,
+            logFile: path.basename(logFilePath)
+          };
         } catch (fallbackError) {
-          console.error(`[DEBUG] All recording methods failed: ${fallbackError.message}`);
+          log(`All recording methods failed: ${fallbackError.message}`);
           // Just return the name, we've tried our best
-          return videoFilename;
+          return { 
+            fileName: videoFilename,
+            logFile: path.basename(logFilePath)
+          };
         }
       }
     }
     
-    console.log(`[DEBUG] Using video file: ${foundVideoFile.filename} (${foundVideoFile.size} bytes)`);
+    log(`Using video file: ${foundVideoFile.filename} (${foundVideoFile.size} bytes)`);
     
     // After finding video file, try to improve its quality with ffmpeg if available
     if (foundVideoFile) {
       // Skip ffmpeg for invalid files - central check in one place with detailed logging
       if (!isValidForFfmpeg(foundVideoFile)) {
-        console.log(`[DEBUG] Skipping ffmpeg enhancement for invalid file: ${foundVideoFile.filename}`);
+        log(`Skipping ffmpeg enhancement for invalid file: ${foundVideoFile.filename}`);
         
         // If we have a screenshot, prefer that over a tiny video file
         if (screenshotTaken && fs.existsSync(screenshotPath) && foundVideoFile.size < 50000) {
-          console.log(`[DEBUG] Returning screenshot (${screenshotFilename}) instead of small video file (${foundVideoFile.size} bytes)`);
-          return screenshotFilename;
+          log(`Returning screenshot (${screenshotFilename}) instead of small video file (${foundVideoFile.size} bytes)`);
+          return { 
+            fileName: screenshotFilename,
+            logFile: path.basename(logFilePath)
+          };
         }
         
-        return foundVideoFile.filename;
+        return { 
+          fileName: foundVideoFile.filename,
+          logFile: path.basename(logFilePath)
+        };
       }
       
       try {
@@ -649,7 +704,7 @@ async function recordWebsite(url, duration = 10) {
         
         try {
           // Check if ffmpeg is available
-          console.log('[DEBUG] Checking if ffmpeg is available');
+          log('Checking if ffmpeg is available');
           execSync(`${FFMPEG_PATH} -version`, { stdio: 'ignore' });
           
           // Choose optimal encoding settings based on hardware capabilities
@@ -663,8 +718,8 @@ async function recordWebsite(url, duration = 10) {
           }
           
           // Enhance video with ffmpeg for smoother playback
-          console.log(`[DEBUG] Enhancing video with ffmpeg (fast mode: ${isDev}): ${enhancedPath}`);
-          console.log(`[DEBUG] ffmpeg command: ${ffmpegCmd}`);
+          log(`Enhancing video with ffmpeg (fast mode: ${isDev}): ${enhancedPath}`);
+          log(`ffmpeg command: ${ffmpegCmd}`);
           try {
             execSync(ffmpegCmd, { 
               stdio: 'inherit',
@@ -673,44 +728,91 @@ async function recordWebsite(url, duration = 10) {
             
             // If enhancement succeeded, use the enhanced file
             if (fs.existsSync(enhancedPath) && fs.statSync(enhancedPath).size > 0) {
-              console.log(`[DEBUG] Enhanced file exists: ${enhancedPath}, size: ${fs.statSync(enhancedPath).size} bytes`);
-              console.log(`[DEBUG] Using enhanced video: ${enhancedPath}`);
-              return path.basename(enhancedPath);
+              log(`Enhanced file exists: ${enhancedPath}, size: ${fs.statSync(enhancedPath).size} bytes`);
+              log(`Using enhanced video: ${enhancedPath}`);
+              return { 
+                fileName: path.basename(enhancedPath),
+                logFile: path.basename(logFilePath)
+              };
             } else {
-              console.log(`[DEBUG] Enhanced video creation failed or resulted in empty file. Using original video.`);
-              return foundVideoFile.filename;
+              log(`Enhanced video creation failed or resulted in empty file. Using original video.`);
+              return { 
+                fileName: foundVideoFile.filename,
+                logFile: path.basename(logFilePath)
+              };
             }
           } catch (ffmpegCmdError) {
-            console.warn(`[DEBUG] FFmpeg command execution failed: ${ffmpegCmdError.message}`);
-            console.warn(`[DEBUG] Returning original unenhanced video file`);
-            return foundVideoFile.filename;
+            log(`FFmpeg command execution failed: ${ffmpegCmdError.message}`);
+            log(`Returning original unenhanced video file`);
+            return { 
+              fileName: foundVideoFile.filename,
+              logFile: path.basename(logFilePath)
+            };
           }
         } catch (ffmpegError) {
-          console.warn(`[DEBUG] FFmpeg enhancement failed: ${ffmpegError.message}`);
-          console.warn(`[DEBUG] FFmpeg error stack: ${ffmpegError.stack}`);
-          return foundVideoFile.filename;
+          log(`FFmpeg enhancement failed: ${ffmpegError.message}`);
+          log(`FFmpeg error stack: ${ffmpegError.stack}`);
+          return { 
+            fileName: foundVideoFile.filename,
+            logFile: path.basename(logFilePath)
+          };
         }
       } catch (enhancementError) {
-        console.warn(`[DEBUG] Video enhancement error: ${enhancementError.message}`);
-        console.warn(`[DEBUG] Enhancement error stack: ${enhancementError.stack}`);
-        return foundVideoFile.filename;
+        log(`Video enhancement error: ${enhancementError.message}`);
+        log(`Enhancement error stack: ${enhancementError.stack}`);
+        return { 
+          fileName: foundVideoFile.filename,
+          logFile: path.basename(logFilePath)
+        };
       }
     }
   } catch (error) {
-    console.error(`[DEBUG] Recording error: ${error.message}`);
-    console.error(`[DEBUG] Recording error stack: ${error.stack}`);
-    throw error;
+    log(`Recording error: ${error.message}`);
+    log(`Recording error stack: ${error.stack}`);
+    // Return the log file name even if there was an error
+    return { 
+      error: error.message,
+      logFile: path.basename(logFilePath)
+    };
   } finally {
     if (browser) {
-      console.log('[DEBUG] Closing browser');
+      log('Closing browser');
       try {
         await browser.close();
-        console.log('[DEBUG] Browser closed');
+        log('Browser closed');
       } catch (closeError) {
-        console.error(`[DEBUG] Error closing browser: ${closeError.message}`);
+        log(`Error closing browser: ${closeError.message}`);
       }
     }
+    
+    log(`Recording session ${sessionId} complete`);
   }
 }
 
-module.exports = { recordWebsite }; 
+// Function to get the most recent log file
+function getLatestLogFile() {
+  try {
+    if (!fs.existsSync(logsDir)) {
+      return null;
+    }
+    
+    const logFiles = fs.readdirSync(logsDir)
+      .filter(file => file.endsWith('.log'))
+      .map(file => {
+        const filePath = path.join(logsDir, file);
+        return {
+          name: file,
+          path: filePath,
+          time: fs.statSync(filePath).mtime.getTime()
+        };
+      })
+      .sort((a, b) => b.time - a.time); // Sort by most recent first
+    
+    return logFiles.length > 0 ? logFiles[0] : null;
+  } catch (error) {
+    console.error(`Error finding latest log file: ${error.message}`);
+    return null;
+  }
+}
+
+module.exports = { recordWebsite, getLatestLogFile }; 

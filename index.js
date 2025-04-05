@@ -2,7 +2,7 @@ const express = require('express');
 const cors = require('cors');
 const path = require('path');
 const fs = require('fs');
-const { recordWebsite } = require('./recorder');
+const { recordWebsite, getLatestLogFile } = require('./recorder');
 const http = require('http');
 const https = require('https');
 
@@ -10,6 +10,12 @@ const https = require('https');
 const uploadsDir = path.join(__dirname, 'uploads');
 if (!fs.existsSync(uploadsDir)) {
   fs.mkdirSync(uploadsDir, { recursive: true });
+}
+
+// Ensure logs directory exists
+const logsDir = path.join(__dirname, 'logs');
+if (!fs.existsSync(logsDir)) {
+  fs.mkdirSync(logsDir, { recursive: true });
 }
 
 const app = express();
@@ -84,94 +90,67 @@ app.post('/api/record', async (req, res) => {
     });
     
     // Record the website - this will create a new file in uploads directory
-    await recordWebsite(url, duration);
+    const recordingResult = await recordWebsite(url, duration);
     
-    // Get all files in uploads directory after recording
-    const afterFiles = fs.readdirSync(uploadsDir)
-      .filter(file => file.endsWith('.webm') || file.endsWith('.png'))
-      .map(file => ({
-        name: file,
-        path: path.join(uploadsDir, file),
-        time: fs.statSync(path.join(uploadsDir, file)).mtime.getTime(),
-        size: fs.statSync(path.join(uploadsDir, file)).size
-      }))
-      .sort((a, b) => b.time - a.time); // Sort by most recent
-    
-    // Find the most recent file that wasn't there before or has been updated
-    let newFiles = afterFiles.filter(file => 
-      !initialFiles.some(initial => initial.name === file.name) || 
-      initialFiles.some(initial => initial.name === file.name && initial.time < file.time)
-    );
-    
-    // Filter out tiny blank files and prefer screenshots over blank videos
-    if (newFiles.length > 0) {
-      // Check if there are any screenshot files
-      const screenshots = newFiles.filter(file => file.name.endsWith('.png'));
-      const videos = newFiles.filter(file => file.name.endsWith('.webm'));
-      
-      // If we have viable videos (larger than 10KB), prefer those
-      const viableVideos = videos.filter(video => video.size > 10000);
-      
-      if (viableVideos.length > 0) {
-        console.log('Found viable video recordings. Using the most recent one.');
-        newFiles = [viableVideos[0]];
-      } 
-      // If no viable videos but we have screenshots, use those
-      else if (screenshots.length > 0) {
-        console.log('No viable video found, using screenshot instead.');
-        newFiles = [screenshots[0]];
-      }
-      // Otherwise use whatever we have, even if it's a blank file
-      else if (videos.length > 0) {
-        console.log('Using available video file, even though it may be small.');
-        newFiles = [videos[0]];
-      }
-    }
-    
-    // If we didn't find any new files, just use the most recent file
-    if (newFiles.length === 0 && afterFiles.length > 0) {
-      console.log('No new files found. Using the most recent file.');
-      // Prefer non-blank files if available
-      const nonBlankFiles = afterFiles.filter(file => !file.name.startsWith('blank-') || file.size > 10000);
-      if (nonBlankFiles.length > 0) {
-        newFiles = [nonBlankFiles[0]];
-      } else {
-        newFiles = [afterFiles[0]];
-      }
-    }
-    
-    // Check if we found any file
-    if (newFiles.length === 0) {
-      console.error('No video or image files found after recording');
+    // Check if there was an error during recording
+    if (recordingResult.error) {
       return res.status(500).json({
         success: false,
         error: 'Recording failed',
-        message: 'No video or image files found after recording'
+        message: recordingResult.error,
+        logFile: recordingResult.logFile
       });
     }
     
-    // Use the most recent file
-    const resultFile = newFiles[0];
-    console.log(`Using file: ${resultFile.name} (${resultFile.size} bytes)`);
+    // Get the filename from the result
+    const resultFilename = recordingResult.fileName;
+    const logFilename = recordingResult.logFile;
+    
+    // Check if we have a valid filename
+    if (!resultFilename) {
+      console.error('No filename returned from recording process');
+      return res.status(500).json({
+        success: false,
+        error: 'Recording failed',
+        message: 'No filename returned from recording process',
+        logFile: logFilename
+      });
+    }
+    
+    // Get file information
+    const resultPath = path.join(uploadsDir, resultFilename);
+    let fileSize = 0;
+    
+    try {
+      if (fs.existsSync(resultPath)) {
+        fileSize = fs.statSync(resultPath).size;
+      } else {
+        console.error(`Result file not found: ${resultPath}`);
+      }
+    } catch (err) {
+      console.error(`Error checking result file: ${err.message}`);
+    }
     
     // Get the host from request
     const host = req.get('host');
     const protocol = req.protocol;
     
     // Build the absolute URL
-    const fileUrl = `/uploads/${resultFile.name}`;
-    const absoluteUrl = `${protocol}://${host}/uploads/${resultFile.name}`;
+    const fileUrl = `/uploads/${resultFilename}`;
+    const absoluteUrl = `${protocol}://${host}/uploads/${resultFilename}`;
     
     // Determine the content type
-    const isImage = resultFile.name.endsWith('.png');
+    const isImage = resultFilename.endsWith('.png');
     
     // Return the recording details
     res.json({
       success: true,
-      filename: resultFile.name,
+      filename: resultFilename,
       url: fileUrl,
       absoluteUrl: absoluteUrl,
-      fileSize: resultFile.size,
+      logFile: logFilename,
+      logUrl: `/api/logs/${logFilename}`,
+      fileSize: fileSize,
       fileType: isImage ? 'image/png' : 'video/webm'
     });
   } catch (error) {
@@ -259,6 +238,71 @@ app.delete('/api/files/:filename', (req, res) => {
     });
   } catch (error) {
     console.error('Error deleting file:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Server error',
+      message: error.message
+    });
+  }
+});
+
+// Add API endpoint to get the latest log
+app.get('/api/last-log', (req, res) => {
+  try {
+    const logFile = getLatestLogFile();
+    
+    if (!logFile) {
+      return res.status(404).json({
+        success: false,
+        error: 'No log files found'
+      });
+    }
+    
+    const logContent = fs.readFileSync(logFile.path, 'utf8');
+    
+    res.json({
+      success: true,
+      filename: logFile.name,
+      time: new Date(logFile.time).toISOString(),
+      content: logContent
+    });
+  } catch (error) {
+    console.error('Error retrieving last log:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Server error',
+      message: error.message
+    });
+  }
+});
+
+// Add API endpoint to get a specific log file
+app.get('/api/logs/:filename', (req, res) => {
+  try {
+    const filename = req.params.filename;
+    const logPath = path.join(logsDir, filename);
+    
+    // Check if file exists and ensure it's a log file for security
+    if (!fs.existsSync(logPath) || !filename.endsWith('.log')) {
+      return res.status(404).json({
+        success: false,
+        error: 'Log file not found',
+        message: 'The requested log file does not exist or is not a valid log'
+      });
+    }
+    
+    // Read the log file
+    const logContent = fs.readFileSync(logPath, 'utf8');
+    
+    // Return the log content
+    res.json({
+      success: true,
+      filename: filename,
+      time: fs.statSync(logPath).mtime.toISOString(),
+      content: logContent
+    });
+  } catch (error) {
+    console.error('Error retrieving log file:', error);
     res.status(500).json({
       success: false,
       error: 'Server error',
