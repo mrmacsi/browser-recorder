@@ -11,9 +11,10 @@ const totalMem = Math.floor(os.totalmem() / (1024 * 1024 * 1024)); // GB
 console.log(`System has ${numCPUs} CPU cores and ${totalMem}GB RAM`);
 
 // Use RAM disk if available for better I/O performance
-const useRamDisk = fs.existsSync('/mnt/ramdisk');
-const tempDir = useRamDisk ? '/mnt/ramdisk' : os.tmpdir();
-console.log(`Using temp directory: ${tempDir}`);
+const isDev = process.env.NODE_ENV === 'development';
+const useRamDisk = process.env.USE_RAM_DISK === 'true' || fs.existsSync('/mnt/ramdisk') || isDev; // Always use RAM in development
+const tempDir = useRamDisk ? (fs.existsSync('/mnt/ramdisk') ? '/mnt/ramdisk' : os.tmpdir()) : os.tmpdir();
+console.log(`Using temp directory: ${tempDir} (RAM-based: ${useRamDisk})`);
 
 // Ensure uploads directory exists with absolute path
 const uploadsDir = path.resolve(__dirname, 'uploads');
@@ -135,6 +136,22 @@ function findPlaywrightRecording(directory) {
     
     if (webmFiles.length > 0) {
       console.log(`Found ${webmFiles.length} webm files, using most recent: ${webmFiles[0].filename}`);
+      
+      // Clean up old temp files in development mode to manage RAM usage
+      if (isDev && useRamDisk && tempDir === os.tmpdir() && webmFiles.length > 5) {
+        console.log(`Cleaning up old temp files (keeping 5 most recent)...`);
+        webmFiles.slice(5).forEach(file => {
+          try {
+            if (file.path.includes(tempDir)) {
+              fs.unlinkSync(file.path);
+              console.log(`Removed old temp file: ${file.filename}`);
+            }
+          } catch (err) {
+            console.warn(`Failed to remove temp file: ${err.message}`);
+          }
+        });
+      }
+      
       return webmFiles[0];
     }
     
@@ -259,10 +276,14 @@ async function recordWebsite(url, duration = 10) {
 
     // Force garbage collection to free memory before recording
     try {
-      global.gc();
-      console.log('Forced garbage collection before recording');
+      if (global.gc) {
+        global.gc();
+        console.log('Forced garbage collection before recording');
+      } else {
+        console.log('Garbage collection not available (Node.js needs --expose-gc flag)');
+      }
     } catch (e) {
-      console.log('Could not force garbage collection (Node.js started without --expose-gc)');
+      console.log('Could not force garbage collection: ' + e.message);
     }
 
     // Optimize context performance
@@ -348,10 +369,12 @@ async function recordWebsite(url, duration = 10) {
           execSync(`${FFMPEG_PATH} -version`, { stdio: 'ignore' });
           
           // Choose optimal encoding settings based on hardware capabilities
-          const ffmpegCmd = `${FFMPEG_PATH} -y -i "${originalPath}" -c:v libvpx-vp9 -b:v 8M -deadline good -cpu-used 0 -pix_fmt yuv420p -quality best -crf 10 -speed 2 "${enhancedPath}"`;
+          const ffmpegCmd = isDev
+            ? `${FFMPEG_PATH} -y -i "${originalPath}" -c:v libvpx-vp9 -b:v 4M -deadline realtime -cpu-used 4 -pix_fmt yuv420p -quality good -crf 20 -speed 4 -threads ${numCPUs} "${enhancedPath}"`
+            : `${FFMPEG_PATH} -y -i "${originalPath}" -c:v libvpx-vp9 -b:v 8M -deadline good -cpu-used 0 -pix_fmt yuv420p -quality best -crf 10 -speed 2 "${enhancedPath}"`;
           
           // Enhance video with ffmpeg for smoother playback
-          console.log(`Enhancing video with ffmpeg: ${enhancedPath}`);
+          console.log(`Enhancing video with ffmpeg (fast mode: ${isDev}): ${enhancedPath}`);
           execSync(ffmpegCmd, { 
             stdio: 'inherit',
             timeout: 120000 // 120 second timeout for higher quality processing
