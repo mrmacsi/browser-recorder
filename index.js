@@ -257,9 +257,8 @@ if (isDev) {
     httpServer.listen(port)
       .on('error', (err) => {
         if (err.code === 'EADDRINUSE') {
-          // If port is in use, try a different port
-          console.warn(`Port ${port} is already in use, trying ${port + 1}...`);
-          startServer(port + 1);
+          console.error(`Port ${port} is already in use. Please kill the process using this port.`);
+          process.exit(1);
         } else {
           console.error('Server error:', err);
         }

@@ -59,9 +59,11 @@ sudo apt-get install -y \
   bc \
   jq
 
-# Kill any existing processes that might be using ports 5001 and 5443
+# Kill any existing processes that might be using ports 7777 and 5443
 echo "Ensuring port 5443 is free..."
 sudo lsof -ti:5443 | xargs -r sudo kill || true
+echo "Ensuring port 7777 is free..."
+sudo lsof -ti:7777 | xargs -r sudo kill || true
 
 # Stop any existing PM2 processes to avoid port conflicts
 if command -v pm2 &> /dev/null; then
