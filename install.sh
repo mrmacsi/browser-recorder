@@ -60,8 +60,7 @@ sudo apt-get install -y \
   jq
 
 # Kill any existing processes that might be using ports 5001 and 5443
-echo "Ensuring ports 5001 and 5443 are free..."
-sudo lsof -ti:5001 | xargs -r sudo kill || true
+echo "Ensuring port 5443 is free..."
 sudo lsof -ti:5443 | xargs -r sudo kill || true
 
 # Stop any existing PM2 processes to avoid port conflicts
@@ -144,7 +143,6 @@ module.exports = {
     max_memory_restart: '1G',
     env: {
       NODE_ENV: 'production',
-      PORT: 5001,
       HTTPS_PORT: 5443,
       NODE_OPTIONS: '--max-old-space-size=4096',
       SSL_KEY_PATH: '/etc/ssl/browser-recorder/privkey.pem',
@@ -165,5 +163,4 @@ sudo env PATH=$PATH:/usr/bin pm2 startup systemd -u $USER --hp $HOME || true
 
 echo "Installation completed successfully!"
 echo "The browser recorder service is now running and configured for optimal performance."
-echo "HTTP endpoint: http://localhost:5001"
 echo "HTTPS endpoint: https://localhost:5443"

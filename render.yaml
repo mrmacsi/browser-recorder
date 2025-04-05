@@ -7,7 +7,7 @@ services:
     dockerfilePath: Dockerfile
     envVars:
       - key: PORT
-        value: 5001
+        value: 5443
     disk:
       name: uploads
       mountPath: /app/uploads

@@ -3,7 +3,6 @@ const cors = require('cors');
 const path = require('path');
 const fs = require('fs');
 const { recordWebsite } = require('./recorder');
-const http = require('http');
 const https = require('https');
 
 // Ensure uploads directory exists
@@ -13,7 +12,6 @@ if (!fs.existsSync(uploadsDir)) {
 }
 
 const app = express();
-const PORT = process.env.PORT || 5001;
 const HTTPS_PORT = process.env.HTTPS_PORT || 5443;
 
 // Enable CORS for development
@@ -184,9 +182,6 @@ app.get('/api/files', (req, res) => {
   }
 });
 
-// Create HTTP server
-const httpServer = http.createServer(app);
-
 // Setup SSL certificates for HTTPS
 let httpsServer;
 try {
@@ -203,41 +198,30 @@ try {
     httpsServer = https.createServer(credentials, app);
     console.log('SSL certificates loaded successfully');
   } else {
-    console.warn('SSL certificates not found at standard path or environment variables.');
-    console.warn('HTTPS server will not be started.');
+    console.error('SSL certificates not found. HTTPS server cannot start.');
+    console.error(`Looked for certificates at: ${privateKeyPath} and ${certificatePath}`);
+    process.exit(1);
   }
 } catch (error) {
-  console.warn('Error loading SSL certificates:', error.message);
-  console.warn('HTTPS server will not be started');
+  console.error('Error loading SSL certificates:', error.message);
+  console.error('HTTPS server cannot start. Exiting...');
+  process.exit(1);
 }
 
-// Start HTTP server
-httpServer.listen(PORT, () => {
-  console.log(`HTTP Server running on port ${PORT}`);
+// Start HTTPS server
+httpsServer.listen(HTTPS_PORT, () => {
+  console.log(`HTTPS Server running on port ${HTTPS_PORT}`);
 });
-
-// Start HTTPS server if available
-if (httpsServer) {
-  httpsServer.listen(HTTPS_PORT, () => {
-    console.log(`HTTPS Server running on port ${HTTPS_PORT}`);
-  });
-}
 
 // Handle graceful shutdown
 process.on('SIGTERM', () => {
   console.log('SIGTERM received, shutting down gracefully');
-  httpServer.close(() => console.log('HTTP server closed'));
-  if (httpsServer) {
-    httpsServer.close(() => console.log('HTTPS server closed'));
-  }
+  httpsServer.close(() => console.log('HTTPS server closed'));
   process.exit(0);
 });
 
 process.on('SIGINT', () => {
   console.log('SIGINT received, shutting down gracefully');
-  httpServer.close(() => console.log('HTTP server closed'));
-  if (httpsServer) {
-    httpsServer.close(() => console.log('HTTPS server closed'));
-  }
+  httpsServer.close(() => console.log('HTTPS server closed'));
   process.exit(0);
 }); 

@@ -39,7 +39,7 @@ COPY . .
 RUN mkdir -p uploads && chmod 777 uploads
 
 # Expose the port
-EXPOSE 5001
+EXPOSE 5443
 
 # Set the command
 CMD ["npm", "start"] 

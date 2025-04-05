@@ -180,17 +180,6 @@ az vm run-command invoke \
 PUBLIC_IP=$(az vm show -d -g "$RESOURCE_GROUP" -n "$VM_NAME" --query publicIps -o tsv)
 echo "VM $VM_NAME created with public IP: $PUBLIC_IP"
 
-# Open port 5001 for HTTP browser recorder service
-echo "Opening port 5001 for HTTP browser recorder service..."
-az network nsg rule create \
-    --resource-group "$RESOURCE_GROUP" \
-    --nsg-name "${VM_NAME}NSG" \
-    --name BrowserRecorderHTTP \
-    --protocol tcp \
-    --priority 1001 \
-    --destination-port-range 5001 \
-    --access allow
-
 # Open port 5443 for HTTPS browser recorder service
 echo "Opening port 5443 for HTTPS browser recorder service..."
 az network nsg rule create \
@@ -198,15 +187,14 @@ az network nsg rule create \
     --nsg-name "${VM_NAME}NSG" \
     --name BrowserRecorderHTTPS \
     --protocol tcp \
-    --priority 1002 \
+    --priority 1001 \
     --destination-port-range 5443 \
     --access allow
 
 if [ $? -ne 0 ]; then
     echo "Failed to open ports. You may need to open them manually."
-    echo "Run the following commands to open the ports:"
-    echo "az network nsg rule create --resource-group $RESOURCE_GROUP --nsg-name ${VM_NAME}NSG --name BrowserRecorderHTTP --protocol tcp --priority 1001 --destination-port-range 5001 --access allow"
-    echo "az network nsg rule create --resource-group $RESOURCE_GROUP --nsg-name ${VM_NAME}NSG --name BrowserRecorderHTTPS --protocol tcp --priority 1002 --destination-port-range 5443 --access allow"
+    echo "Run the following command to open the port:"
+    echo "az network nsg rule create --resource-group $RESOURCE_GROUP --nsg-name ${VM_NAME}NSG --name BrowserRecorderHTTPS --protocol tcp --priority 1001 --destination-port-range 5443 --access allow"
 fi
 
 # Wait for the VM to be fully provisioned
@@ -256,18 +244,17 @@ az vm run-command invoke \
     --resource-group "$RESOURCE_GROUP" \
     --name "$VM_NAME" \
     --command-id RunShellScript \
-    --scripts "curl -s http://localhost:5001/api/health || echo 'HTTP health check failed' && curl -s -k https://localhost:5443/api/health || echo 'HTTPS health check failed'"
+    --scripts "curl -s -k https://localhost:5443/api/health || echo 'HTTPS health check failed'"
 
 echo "Setup complete. You can SSH into the VM using: ssh azureuser@$PUBLIC_IP"
 echo "Your application is running at:"
-echo "  - HTTP: http://$PUBLIC_IP:5001"
 echo "  - HTTPS: https://$PUBLIC_IP:5443"
 echo ""
 echo "API endpoints:"
-echo "  - GET http://$PUBLIC_IP:5001/api/health or https://$PUBLIC_IP:5443/api/health - Check service health"
-echo "  - POST http://$PUBLIC_IP:5001/api/record or https://$PUBLIC_IP:5443/api/record - Record a website"
-echo "  - GET http://$PUBLIC_IP:5001/api/files or https://$PUBLIC_IP:5443/api/files - List recordings"
-echo "  - GET http://$PUBLIC_IP:5001/uploads/[filename] or https://$PUBLIC_IP:5443/uploads/[filename] - Access recorded videos"
+echo "  - GET https://$PUBLIC_IP:5443/api/health - Check service health"
+echo "  - POST https://$PUBLIC_IP:5443/api/record - Record a website"
+echo "  - GET https://$PUBLIC_IP:5443/api/files - List recordings"
+echo "  - GET https://$PUBLIC_IP:5443/uploads/[filename] - Access recorded videos"
 echo ""
 echo "NOTE: Since we're using a self-signed certificate, browsers will show a security warning when using HTTPS."
 echo "You can proceed by accepting the risk or exception in your browser." 
