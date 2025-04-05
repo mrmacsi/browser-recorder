@@ -56,9 +56,11 @@ const VIDEO_WIDTH = 1920; // Always use full HD
 const VIDEO_HEIGHT = 1080; // Always use full HD
 const FFMPEG_PATH = process.env.FFMPEG_PATH || 'ffmpeg';
 const USE_HARDWARE_ACCELERATION = true; // Always enable hardware acceleration for local
+const DISABLE_PAGE_ACTIVITY = process.env.DISABLE_PAGE_ACTIVITY === 'true' || true; // Default to disabled
 
 console.log(`Video settings: ${VIDEO_WIDTH}x${VIDEO_HEIGHT} @ ${VIDEO_FPS}fps`);
 console.log(`Hardware acceleration: ${USE_HARDWARE_ACCELERATION ? 'Enabled' : 'Disabled'}`);
+console.log(`Page activity: ${DISABLE_PAGE_ACTIVITY ? 'Disabled' : 'Enabled'}`);
 
 // Function to check if browsers are installed
 async function ensureBrowsersInstalled() {
@@ -95,17 +97,10 @@ async function generatePageActivity(page, durationMs) {
   
   console.log('Starting page activity to ensure recording has content...');
   
-  // Create a function to perform random scrolling and movement
+  // Create a function to perform mouse movement only (no scrolling)
   const performActivity = async () => {
     try {
-      // Scroll randomly
-      await page.evaluate(() => {
-        const scrollAmount = Math.floor(Math.random() * 500);
-        window.scrollBy(0, scrollAmount);
-        setTimeout(() => window.scrollBy(0, -scrollAmount), 300); // Reduced from 500ms for smoother scrolling
-      });
-      
-      // Move mouse randomly (if the page is still active)
+      // Only move mouse randomly (if the page is still active)
       try {
         const viewportSize = await page.viewportSize();
         if (viewportSize) {
@@ -324,9 +319,13 @@ async function recordWebsite(url, duration = 10) {
       await page.waitForTimeout(1000);
       
       // Add some initial interactivity to make sure the video has content
-      console.log(`Generating initial page activity...`);
-      // Only generate activity for 2 seconds at the beginning instead of full duration
-      await generatePageActivity(page, 2000);
+      if (!DISABLE_PAGE_ACTIVITY) {
+        console.log(`Generating initial page activity...`);
+        // Only generate activity for 2 seconds at the beginning instead of full duration
+        await generatePageActivity(page, 2000);
+      } else {
+        console.log(`Page activity disabled, recording page as-is...`);
+      }
       
       // Wait for the remainder of the recording time
       console.log(`Waiting for the remaining recording time...`);
