@@ -87,8 +87,7 @@ case "$VM_SIZE" in
     Standard_B2s|Standard_B2ms|Standard_D2s_v3|Standard_E2s_v3|Standard_F2s_v2) CORE_COUNT=2 ;;
     Standard_B4ms|Standard_D4s_v3|Standard_E4s_v3|Standard_F4s_v2) CORE_COUNT=4 ;;
     Standard_B8ms|Standard_D8s_v3|Standard_E8s_v3|Standard_F8s_v2) CORE_COUNT=8 ;;
-    Standard_D16s_v3|Standard_F16s_v2) CORE_COUNT=16 ;;
-    Standard_NV6) CORE_COUNT=6 ;;
+    Standard_D16s_v3) CORE_COUNT=16 ;;
     *) CORE_COUNT=4 ;;  # Default assumption
 esac
 
@@ -108,127 +107,37 @@ if (( CORE_COUNT > QUOTA_LIMIT )); then
     echo "You need at least $CORE_COUNT cores, but your limit is $QUOTA_LIMIT cores."
     echo ""
     echo "You have the following options:"
-    echo "1. Request a quota increase from Azure portal"
-    echo "2. Try a different Azure region that might have higher quota"
-    echo "3. Select a smaller VM size that fits within your quota"
+    echo "1. Request a quota increase from Azure portal:"
+    echo "   https://aka.ms/ProdportalCRP/#blade/Microsoft_Azure_Capacity/UsageAndQuota.ReactView"
+    echo "2. Select a smaller VM size that fits within your quota."
+    echo "3. Try a different Azure region that might have higher quota."
     echo ""
     
-    # Check quotas in other popular regions
-    echo "Checking quotas in other Azure regions..."
-    declare -a REGIONS=("eastus" "westus2" "northeurope" "southeastasia" "australiaeast" "centralus" "uksouth")
+    read -p "Would you like to continue with a smaller VM that fits your quota? (y/n): " CONTINUE_SMALLER
     
-    echo "Region availability for $VM_SIZE VM:"
-    for region in "${REGIONS[@]}"; do
-        if [ "$region" != "$LOCATION" ]; then
-            region_quota=$(az vm list-usage --location "$region" --query "[?name.value=='cores']" -o tsv | awk '{print $3}')
-            if [ -n "$region_quota" ] && (( region_quota >= CORE_COUNT )); then
-                echo "✅ $region - Available! (Quota: $region_quota cores)"
-            else
-                echo "❌ $region - Not enough quota (Limit: $region_quota cores)"
-            fi
-        fi
-    done
-    
-    echo ""
-    echo "Select an option:"
-    echo "1) Request a quota increase in $LOCATION (takes 1-3 business days)"
-    echo "2) Try creating VM in a different region"
-    echo "3) Choose a smaller VM size"
-    read -p "Enter your choice [1-3]: " QUOTA_CHOICE
-    
-    case $QUOTA_CHOICE in
-        1)
-            echo ""
-            echo "To request a quota increase:"
-            echo "1. Visit: https://aka.ms/ProdportalCRP/#blade/Microsoft_Azure_Capacity/UsageAndQuota.ReactView"
-            echo "2. Select your subscription"
-            echo "3. Click 'Request increase' at the top"
-            echo "4. Choose 'Compute-VM (cores-vCPU) subscription limit increases'"
-            echo "5. Select '$LOCATION' region and request at least $CORE_COUNT cores"
-            echo ""
-            echo "The approval process typically takes 1-3 business days."
-            echo "After your quota increase is approved, run this script again."
-            echo ""
-            read -p "Press Enter to exit..."
-            exit 0
-            ;;
-            
-        2)
-            echo ""
-            echo "Select a new region with sufficient quota:"
-            count=1
-            declare -a AVAILABLE_REGIONS=()
-            
-            for region in "${REGIONS[@]}"; do
-                if [ "$region" != "$LOCATION" ]; then
-                    region_quota=$(az vm list-usage --location "$region" --query "[?name.value=='cores']" -o tsv | awk '{print $3}')
-                    if [ -n "$region_quota" ] && (( region_quota >= CORE_COUNT )); then
-                        AVAILABLE_REGIONS+=("$region")
-                        echo "$count) $region (Quota: $region_quota cores)"
-                        count=$((count+1))
-                    fi
-                fi
-            done
-            
-            if [ ${#AVAILABLE_REGIONS[@]} -eq 0 ]; then
-                echo "No regions with sufficient quota found. Please request a quota increase."
-                echo "Visit: https://aka.ms/ProdportalCRP/#blade/Microsoft_Azure_Capacity/UsageAndQuota.ReactView"
-                exit 1
-            fi
-            
-            read -p "Select region number [1-$((count-1))]: " REGION_CHOICE
-            if [ "$REGION_CHOICE" -ge 1 ] && [ "$REGION_CHOICE" -lt "$count" ]; then
-                LOCATION=${AVAILABLE_REGIONS[$((REGION_CHOICE-1))]}
-                echo "Selected region: $LOCATION"
-            else
-                echo "Invalid selection. Exiting."
-                exit 1
-            fi
-            ;;
-            
-        3)
-            echo ""
-            echo "Select a VM size that fits within your quota ($QUOTA_LIMIT cores):"
-            
-            if (( QUOTA_LIMIT >= 8 )); then
-                echo "1) Standard_F8s_v2 - 8 vCPUs, 16 GB RAM - High performance computing"
-                echo "2) Standard_D8s_v3 - 8 vCPUs, 32 GB RAM - Balanced performance"
-                echo "3) Standard_NV6    - 6 vCPUs, 56 GB RAM - GPU accelerated (NVIDIA Tesla M60)"
-                read -p "Select VM size [1-3]: " SIZE_CHOICE
-                
-                case $SIZE_CHOICE in
-                    1) VM_SIZE="Standard_F8s_v2"; CORE_COUNT=8 ;;
-                    2) VM_SIZE="Standard_D8s_v3"; CORE_COUNT=8 ;;
-                    3) VM_SIZE="Standard_NV6"; CORE_COUNT=6 ;;
-                    *) VM_SIZE="Standard_F8s_v2"; CORE_COUNT=8 ;;
-                esac
-                
-            elif (( QUOTA_LIMIT >= 4 )); then
-                echo "1) Standard_F4s_v2 - 4 vCPUs, 8 GB RAM - High performance computing"
-                echo "2) Standard_D4s_v3 - 4 vCPUs, 16 GB RAM - Balanced performance"
-                read -p "Select VM size [1-2]: " SIZE_CHOICE
-                
-                case $SIZE_CHOICE in
-                    1) VM_SIZE="Standard_F4s_v2"; CORE_COUNT=4 ;;
-                    2) VM_SIZE="Standard_D4s_v3"; CORE_COUNT=4 ;;
-                    *) VM_SIZE="Standard_F4s_v2"; CORE_COUNT=4 ;;
-                esac
-                
-            else
-                echo "Your quota is too low for optimal performance. Consider requesting an increase."
-                echo "For now, we'll use the largest available size:"
-                VM_SIZE="Standard_F2s_v2"
-                CORE_COUNT=2
-            fi
-            
-            echo "Selected VM size: $VM_SIZE ($CORE_COUNT cores)"
-            ;;
-            
-        *)
-            echo "Invalid option. Exiting."
+    if [[ "$CONTINUE_SMALLER" == "y" || "$CONTINUE_SMALLER" == "Y" ]]; then
+        echo "Selecting the largest VM size that fits within your quota..."
+        
+        if (( QUOTA_LIMIT >= 8 )); then
+            VM_SIZE="Standard_D8s_v3"
+            echo "Selected Standard_D8s_v3 (8 vCPU, 32 GB RAM)"
+        elif (( QUOTA_LIMIT >= 4 )); then
+            VM_SIZE="Standard_D4s_v3"
+            echo "Selected Standard_D4s_v3 (4 vCPU, 16 GB RAM)"
+        elif (( QUOTA_LIMIT >= 2 )); then
+            VM_SIZE="Standard_D2s_v3"
+            echo "Selected Standard_D2s_v3 (2 vCPU, 8 GB RAM)"
+        elif (( QUOTA_LIMIT >= 1 )); then
+            VM_SIZE="Standard_B1ms"
+            echo "Selected Standard_B1ms (1 vCPU, 2 GB RAM)"
+        else
+            echo "Your quota is too low to create any VM. Please request a quota increase."
             exit 1
-            ;;
-    esac
+        fi
+    else
+        echo "Operation cancelled. Please request a quota increase or try a different region."
+        exit 1
+    fi
 fi
 
 # Create resource group if it doesn't exist

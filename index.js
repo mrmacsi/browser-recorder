@@ -144,14 +144,17 @@ app.get('/api/health', (req, res) => {
   });
 });
 
-// List all recordings endpoint
+// List all recordings in the uploads directory
 app.get('/api/files', (req, res) => {
   try {
+    if (!fs.existsSync(uploadsDir)) {
+      return res.json({ files: [] });
+    }
+    
     const files = fs.readdirSync(uploadsDir)
       .filter(file => file.endsWith('.webm'))
       .map(file => {
-        const filePath = path.join(uploadsDir, file);
-        const stats = fs.statSync(filePath);
+        const stats = fs.statSync(path.join(uploadsDir, file));
         
         // Get the host from request
         const host = req.get('host');
@@ -164,7 +167,8 @@ app.get('/api/files', (req, res) => {
           size: stats.size,
           created: stats.mtime.toISOString()
         };
-      });
+      })
+      .sort((a, b) => new Date(b.created) - new Date(a.created));
     
     res.json({
       count: files.length,
@@ -173,31 +177,38 @@ app.get('/api/files', (req, res) => {
   } catch (error) {
     console.error('Error listing files:', error);
     res.status(500).json({
+      success: false,
       error: 'Server error',
       message: error.message
     });
   }
 });
 
-// Setup SSL certificates for HTTPS
-let privateKey, certificate, credentials;
-try {
-  privateKey = fs.readFileSync('/etc/ssl/browser-recorder/privkey.pem', 'utf8');
-  certificate = fs.readFileSync('/etc/ssl/browser-recorder/cert.pem', 'utf8');
-  credentials = { key: privateKey, cert: certificate };
-  console.log('SSL certificates loaded successfully');
-} catch (error) {
-  console.warn('SSL certificates not found or cannot be read:', error.message);
-  console.warn('HTTPS server will not be started');
-}
-
 // Create HTTP server
 const httpServer = http.createServer(app);
 
-// Create HTTPS server if credentials available
+// Setup SSL certificates for HTTPS
 let httpsServer;
-if (credentials) {
-  httpsServer = https.createServer(credentials, app);
+try {
+  // Try to read SSL certificates if available
+  const privateKeyPath = process.env.SSL_KEY_PATH || '/etc/ssl/browser-recorder/privkey.pem';
+  const certificatePath = process.env.SSL_CERT_PATH || '/etc/ssl/browser-recorder/cert.pem';
+  
+  if (fs.existsSync(privateKeyPath) && fs.existsSync(certificatePath)) {
+    const privateKey = fs.readFileSync(privateKeyPath, 'utf8');
+    const certificate = fs.readFileSync(certificatePath, 'utf8');
+    const credentials = { key: privateKey, cert: certificate };
+    
+    // Create HTTPS server with the certificates
+    httpsServer = https.createServer(credentials, app);
+    console.log('SSL certificates loaded successfully');
+  } else {
+    console.warn('SSL certificates not found at standard path or environment variables.');
+    console.warn('HTTPS server will not be started.');
+  }
+} catch (error) {
+  console.warn('Error loading SSL certificates:', error.message);
+  console.warn('HTTPS server will not be started');
 }
 
 // Start HTTP server

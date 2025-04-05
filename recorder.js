@@ -5,6 +5,16 @@ const fs = require('fs');
 const os = require('os');
 const { execSync } = require('child_process');
 
+// Determine optimal CPU and memory settings
+const numCPUs = os.cpus().length;
+const totalMem = Math.floor(os.totalmem() / (1024 * 1024 * 1024)); // GB
+console.log(`System has ${numCPUs} CPU cores and ${totalMem}GB RAM`);
+
+// Use RAM disk if available for better I/O performance
+const useRamDisk = fs.existsSync('/mnt/ramdisk');
+const tempDir = useRamDisk ? '/mnt/ramdisk' : os.tmpdir();
+console.log(`Using temp directory: ${tempDir}`);
+
 // Ensure uploads directory exists with absolute path
 const uploadsDir = path.resolve(__dirname, 'uploads');
 console.log(`Using uploads directory: ${uploadsDir}`);
@@ -19,17 +29,16 @@ if (!fs.existsSync(uploadsDir)) {
   }
 }
 
-// Calculate available CPU cores for resource allocation
-const numCPUs = os.cpus().length;
-const totalMemory = os.totalmem();
-console.log(`System has ${numCPUs} CPU cores and ${Math.round(totalMemory / 1024 / 1024 / 1024)}GB total memory`);
-
 // Configure video optimization based on system resources
-const VIDEO_FPS = 60; // Increased to 30 FPS for smoother video
-const ACTIVITY_DELAY = 300; // Further decreased delay for smoother activity
-const VIDEO_WIDTH = 1920; // Reduced from 1280 to improve performance
-const VIDEO_HEIGHT = 1080; // Reduced from 720 to improve performance (16:9 ratio maintained)
-const FFMPEG_PATH = process.env.FFMPEG_PATH || 'ffmpeg'; // Path to ffmpeg for post-processing
+const VIDEO_FPS = numCPUs >= 4 ? 30 : 24; // Adjust FPS based on available cores
+const ACTIVITY_DELAY = 300; // Reduced delay for smoother activity
+const VIDEO_WIDTH = numCPUs >= 8 ? 1920 : 1280; // Adjust resolution based on CPU
+const VIDEO_HEIGHT = numCPUs >= 8 ? 1080 : 720; // Maintain 16:9 ratio
+const FFMPEG_PATH = process.env.FFMPEG_PATH || 'ffmpeg';
+const USE_HARDWARE_ACCELERATION = process.env.HARDWARE_ACCELERATION === 'true';
+
+console.log(`Video settings: ${VIDEO_WIDTH}x${VIDEO_HEIGHT} @ ${VIDEO_FPS}fps`);
+console.log(`Hardware acceleration: ${USE_HARDWARE_ACCELERATION ? 'Enabled' : 'Disabled'}`);
 
 // Function to check if browsers are installed
 async function ensureBrowsersInstalled() {
@@ -161,50 +170,60 @@ async function recordWebsite(url, duration = 10) {
   // Launch browser with appropriate configuration
   let browser;
   try {
+    // Optimize browser arguments based on system capabilities
+    const browserArgs = [
+      '--no-sandbox',
+      '--disable-setuid-sandbox',
+      '--disable-dev-shm-usage',
+      '--no-first-run',
+      '--no-zygote',
+      '--high-dpi-support=1',
+      '--force-device-scale-factor=1',
+      `--js-flags=--max-old-space-size=${Math.min(4096, totalMem * 1024 / 2)}`,
+      `--renderer-process-limit=${Math.max(4, numCPUs)}`,
+      '--disable-web-security',
+      '--autoplay-policy=no-user-gesture-required',
+      '--disable-extensions',
+      '--disable-background-networking',
+      '--disable-background-timer-throttling',
+      '--disable-backgrounding-occluded-windows',
+      '--disable-breakpad',
+      '--disable-component-extensions-with-background-pages',
+      '--disable-features=TranslateUI,BlinkGenPropertyTrees,ScriptStreaming',
+      '--disable-ipc-flooding-protection',
+      '--disable-renderer-backgrounding',
+      '--mute-audio',
+      '--disable-sync',
+      '--memory-pressure-off',
+      '--disable-hang-monitor',
+      '--disable-domain-reliability',
+      '--aggressive-cache-discard',
+      `--disable-features=site-per-process`,
+      `--run-all-compositor-stages-before-draw`
+    ];
+    
+    // Add hardware acceleration flags if available
+    if (USE_HARDWARE_ACCELERATION) {
+      browserArgs.push(
+        '--enable-gpu-rasterization',
+        '--enable-zero-copy',
+        '--enable-accelerated-video-decode',
+        '--enable-accelerated-mjpeg-decode',
+        '--enable-accelerated-2d-canvas',
+        '--ignore-gpu-blocklist'
+      );
+    } else {
+      browserArgs.push('--disable-gpu');
+      browserArgs.push('--disable-accelerated-2d-canvas');
+      browserArgs.push('--use-gl=swiftshader');
+    }
+    
     browser = await chromium.launch({
       headless: true,
-      executablePath: process.env.CHROME_PATH, // Use environment variable if set, otherwise use Playwright's built-in browser
-      chromiumSandbox: false, // Disable sandbox for better performance
-      timeout: 60000, // Longer timeout for startup
-      args: [
-        '--no-sandbox',
-        '--disable-setuid-sandbox',
-        '--disable-dev-shm-usage',
-        '--disable-accelerated-2d-canvas',
-        '--no-first-run',
-        '--no-zygote',
-        '--disable-gpu',
-        '--high-dpi-support=1',
-        '--force-device-scale-factor=1',
-        '--js-flags=--max-old-space-size=8192', // Increased memory allocation
-        `--renderer-process-limit=${Math.max(6, numCPUs)}`, // Allow more renderer processes
-        '--disable-web-security',
-        '--autoplay-policy=no-user-gesture-required',
-        '--disable-extensions',
-        '--disable-background-networking',
-        '--disable-background-timer-throttling',
-        '--disable-backgrounding-occluded-windows',
-        '--disable-breakpad',
-        '--disable-component-extensions-with-background-pages',
-        '--disable-features=TranslateUI,BlinkGenPropertyTrees,ScriptStreaming',
-        '--disable-ipc-flooding-protection',
-        '--disable-renderer-backgrounding',
-        '--mute-audio',
-        '--disable-sync',
-        '--use-gl=swiftshader',
-        '--disable-speech-api',
-        '--memory-pressure-off',
-        '--disable-hang-monitor',
-        '--disable-domain-reliability',
-        '--disable-histogram-customizer',
-        '--single-process', // Use single process mode for better video performance
-        '--deterministic-mode', // More consistent timing
-        '--aggressive-cache-discard', // Prevent memory bloat
-        `--disable-features=site-per-process`, // Disable site isolation
-        `--disable-threaded-animation`, // Disable threaded animation
-        `--disable-threaded-scrolling`, // Disable threaded scrolling
-        `--run-all-compositor-stages-before-draw` // Ensure smooth visual rendering
-      ]
+      executablePath: process.env.CHROME_PATH,
+      chromiumSandbox: false,
+      timeout: 60000,
+      args: browserArgs
     });
   } catch (error) {
     console.error('Failed to launch browser:', error.message);
@@ -221,7 +240,7 @@ async function recordWebsite(url, duration = 10) {
     const context = await browser.newContext({
       viewport: { width: VIDEO_WIDTH, height: VIDEO_HEIGHT },
       recordVideo: {
-        dir: uploadsDir,
+        dir: useRamDisk ? tempDir : uploadsDir,
         size: { width: VIDEO_WIDTH, height: VIDEO_HEIGHT },
         fps: VIDEO_FPS
       },
@@ -287,8 +306,22 @@ async function recordWebsite(url, duration = 10) {
     const videoPath = await context.close();
     console.log(`Context closed, video path: ${videoPath || 'undefined'}`);
     
-    // Look for the most recently created video file in the uploads directory
-    const foundVideoFile = findPlaywrightRecording(uploadsDir);
+    // Look for the most recently created video file
+    let foundVideoFile;
+    
+    // If using RAM disk, copy the file to uploads directory
+    if (useRamDisk && videoPath && fs.existsSync(videoPath)) {
+      const destFile = path.join(uploadsDir, path.basename(videoPath));
+      fs.copyFileSync(videoPath, destFile);
+      fs.unlinkSync(videoPath); // Remove the temp file
+      foundVideoFile = {
+        filename: path.basename(destFile),
+        path: destFile,
+        size: fs.statSync(destFile).size
+      };
+    } else {
+      foundVideoFile = findPlaywrightRecording(uploadsDir);
+    }
     
     // Handle the case where no video was found
     if (!foundVideoFile) {
@@ -314,9 +347,14 @@ async function recordWebsite(url, duration = 10) {
           // Check if ffmpeg is available
           execSync(`${FFMPEG_PATH} -version`, { stdio: 'ignore' });
           
+          // Choose optimal encoding settings based on hardware capabilities
+          const ffmpegCmd = USE_HARDWARE_ACCELERATION 
+            ? `${FFMPEG_PATH} -y -i "${originalPath}" -c:v libvpx-vp9 -b:v 2M -deadline realtime -cpu-used 0 -pix_fmt yuv420p -quality good -crf 30 -speed 4 "${enhancedPath}"`
+            : `${FFMPEG_PATH} -y -i "${originalPath}" -c:v libvpx-vp9 -b:v 1M -deadline realtime -cpu-used 8 -pix_fmt yuv420p -quality realtime -crf 40 -speed 6 "${enhancedPath}"`;
+          
           // Enhance video with ffmpeg for smoother playback
           console.log(`Enhancing video with ffmpeg: ${enhancedPath}`);
-          execSync(`${FFMPEG_PATH} -y -i "${originalPath}" -c:v libvpx-vp9 -b:v 2M -deadline realtime -cpu-used 0 -pix_fmt yuv420p "${enhancedPath}"`, { 
+          execSync(ffmpegCmd, { 
             stdio: 'inherit',
             timeout: 60000 // 60 second timeout
           });
