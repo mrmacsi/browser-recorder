@@ -30,12 +30,12 @@ if (!fs.existsSync(uploadsDir)) {
 }
 
 // Configure video optimization based on system resources
-const VIDEO_FPS = numCPUs >= 4 ? 30 : 24; // Adjust FPS based on available cores
-const ACTIVITY_DELAY = 300; // Reduced delay for smoother activity
-const VIDEO_WIDTH = numCPUs >= 8 ? 1920 : 1280; // Adjust resolution based on CPU
-const VIDEO_HEIGHT = numCPUs >= 8 ? 1080 : 720; // Maintain 16:9 ratio
+const VIDEO_FPS = 60; // Increased to 60fps for smoother playback
+const ACTIVITY_DELAY = 150; // Reduced delay for even smoother activity
+const VIDEO_WIDTH = 1920; // Always use full HD
+const VIDEO_HEIGHT = 1080; // Always use full HD
 const FFMPEG_PATH = process.env.FFMPEG_PATH || 'ffmpeg';
-const USE_HARDWARE_ACCELERATION = process.env.HARDWARE_ACCELERATION === 'true';
+const USE_HARDWARE_ACCELERATION = true; // Always enable hardware acceleration for local
 
 console.log(`Video settings: ${VIDEO_WIDTH}x${VIDEO_HEIGHT} @ ${VIDEO_FPS}fps`);
 console.log(`Hardware acceleration: ${USE_HARDWARE_ACCELERATION ? 'Enabled' : 'Disabled'}`);
@@ -246,7 +246,7 @@ async function recordWebsite(url, duration = 10) {
       },
       ignoreHTTPSErrors: true,
       bypassCSP: true,
-      deviceScaleFactor: 1.0,
+      deviceScaleFactor: 2.0, // Increased for sharper rendering
       hasTouch: false,
       isMobile: false,
       javaScriptEnabled: true,
@@ -276,12 +276,12 @@ async function recordWebsite(url, duration = 10) {
     try {
       // Navigate to the URL with optimized wait conditions
       await page.goto(url, { 
-        waitUntil: 'domcontentloaded', // Changed from 'networkidle' to improve performance
-        timeout: 30000 // Reduced timeout for faster loading
+        waitUntil: 'networkidle', // Wait for network to be idle for better content loading
+        timeout: 60000 // Increased timeout for more complete loading
       });
       
-      // Reduced stabilization time
-      await page.waitForTimeout(500); // Reduced from 1000ms
+      // Allow page to fully render
+      await page.waitForTimeout(1000);
       
       // Add some initial interactivity to make sure the video has content
       console.log(`Generating initial page activity...`);
@@ -348,15 +348,13 @@ async function recordWebsite(url, duration = 10) {
           execSync(`${FFMPEG_PATH} -version`, { stdio: 'ignore' });
           
           // Choose optimal encoding settings based on hardware capabilities
-          const ffmpegCmd = USE_HARDWARE_ACCELERATION 
-            ? `${FFMPEG_PATH} -y -i "${originalPath}" -c:v libvpx-vp9 -b:v 2M -deadline realtime -cpu-used 0 -pix_fmt yuv420p -quality good -crf 30 -speed 4 "${enhancedPath}"`
-            : `${FFMPEG_PATH} -y -i "${originalPath}" -c:v libvpx-vp9 -b:v 1M -deadline realtime -cpu-used 8 -pix_fmt yuv420p -quality realtime -crf 40 -speed 6 "${enhancedPath}"`;
+          const ffmpegCmd = `${FFMPEG_PATH} -y -i "${originalPath}" -c:v libvpx-vp9 -b:v 8M -deadline good -cpu-used 0 -pix_fmt yuv420p -quality best -crf 10 -speed 2 "${enhancedPath}"`;
           
           // Enhance video with ffmpeg for smoother playback
           console.log(`Enhancing video with ffmpeg: ${enhancedPath}`);
           execSync(ffmpegCmd, { 
             stdio: 'inherit',
-            timeout: 60000 // 60 second timeout
+            timeout: 120000 // 120 second timeout for higher quality processing
           });
           
           // If enhancement succeeded, use the enhanced file
