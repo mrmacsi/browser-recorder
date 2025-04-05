@@ -506,14 +506,15 @@ async function recordWebsite(url, duration = 10) {
     // After finding video file, try to improve its quality with ffmpeg if available
     if (foundVideoFile) {
       try {
-        // Check if the file is too small to be a valid video (likely a blank file)
-        // Increased minimum size to 10KB to ensure it's a valid video
+        // First check: If filename starts with 'blank-', it's a placeholder we created - skip processing completely
+        if (foundVideoFile.filename.startsWith('blank-')) {
+          console.log(`[DEBUG] Detected blank placeholder file (${foundVideoFile.filename}). Skipping enhancement.`);
+          return foundVideoFile.filename;
+        }
+        
+        // Second check: if the file is too small to be a valid video
         if (foundVideoFile.size < 10000) {
           console.log(`[DEBUG] File size (${foundVideoFile.size} bytes) is too small for a valid video. Skipping enhancement.`);
-          // If filename starts with 'blank-', it's a placeholder we created
-          if (foundVideoFile.filename.startsWith('blank-')) {
-            console.log(`[DEBUG] Detected blank placeholder file. Skipping enhancement.`);
-          }
           return foundVideoFile.filename;
         }
         
