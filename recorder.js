@@ -12,7 +12,25 @@ console.log(`System has ${numCPUs} CPU cores and ${totalMem}GB RAM`);
 
 // Use RAM disk if available for better I/O performance
 const isDev = process.env.NODE_ENV === 'development';
-const useRamDisk = process.env.USE_RAM_DISK === 'true' || fs.existsSync('/mnt/ramdisk') || isDev; // Always use RAM in development
+const useRamDisk = process.env.USE_RAM_DISK === 'true' || fs.existsSync('/mnt/ramdisk') || true; // Always use RAM in all environments
+
+// Create a RAM disk if requested and we're on Linux (typical server environment)
+if (process.env.CREATE_RAM_DISK === 'true' && os.platform() === 'linux' && !fs.existsSync('/mnt/ramdisk')) {
+  try {
+    console.log('Attempting to create RAM disk on Linux server...');
+    // Create the mount point if it doesn't exist
+    if (!fs.existsSync('/mnt/ramdisk')) {
+      execSync('sudo mkdir -p /mnt/ramdisk', { stdio: 'inherit' });
+    }
+    // Create a 1GB RAM disk
+    execSync('sudo mount -t tmpfs -o size=1g tmpfs /mnt/ramdisk', { stdio: 'inherit' });
+    console.log('RAM disk created successfully at /mnt/ramdisk');
+  } catch (error) {
+    console.warn(`Failed to create RAM disk: ${error.message}`);
+    console.warn('Will use system temp directory instead');
+  }
+}
+
 const tempDir = useRamDisk ? (fs.existsSync('/mnt/ramdisk') ? '/mnt/ramdisk' : os.tmpdir()) : os.tmpdir();
 console.log(`Using temp directory: ${tempDir} (RAM-based: ${useRamDisk})`);
 
@@ -138,7 +156,7 @@ function findPlaywrightRecording(directory) {
       console.log(`Found ${webmFiles.length} webm files, using most recent: ${webmFiles[0].filename}`);
       
       // Clean up old temp files in development mode to manage RAM usage
-      if (isDev && useRamDisk && tempDir === os.tmpdir() && webmFiles.length > 5) {
+      if (useRamDisk && tempDir === os.tmpdir() && webmFiles.length > 5) {
         console.log(`Cleaning up old temp files (keeping 5 most recent)...`);
         webmFiles.slice(5).forEach(file => {
           try {
@@ -369,9 +387,14 @@ async function recordWebsite(url, duration = 10) {
           execSync(`${FFMPEG_PATH} -version`, { stdio: 'ignore' });
           
           // Choose optimal encoding settings based on hardware capabilities
-          const ffmpegCmd = isDev
-            ? `${FFMPEG_PATH} -y -i "${originalPath}" -c:v libvpx-vp9 -b:v 4M -deadline realtime -cpu-used 4 -pix_fmt yuv420p -quality good -crf 20 -speed 4 -threads ${numCPUs} "${enhancedPath}"`
-            : `${FFMPEG_PATH} -y -i "${originalPath}" -c:v libvpx-vp9 -b:v 8M -deadline good -cpu-used 0 -pix_fmt yuv420p -quality best -crf 10 -speed 2 "${enhancedPath}"`;
+          let ffmpegCmd;
+          if (isDev) {
+            // Fast mode for development - speed over quality
+            ffmpegCmd = `${FFMPEG_PATH} -y -i "${originalPath}" -c:v libvpx-vp9 -b:v 4M -deadline realtime -cpu-used 4 -pix_fmt yuv420p -quality good -crf 20 -speed 4 -threads ${numCPUs} "${enhancedPath}"`;
+          } else {
+            // Balanced mode for production - good quality with reasonable speed
+            ffmpegCmd = `${FFMPEG_PATH} -y -i "${originalPath}" -c:v libvpx-vp9 -b:v 6M -deadline good -cpu-used 2 -pix_fmt yuv420p -quality good -crf 18 -speed 3 -threads ${numCPUs} "${enhancedPath}"`;
+          }
           
           // Enhance video with ffmpeg for smoother playback
           console.log(`Enhancing video with ffmpeg (fast mode: ${isDev}): ${enhancedPath}`);
