@@ -171,9 +171,9 @@ async function generatePageActivity(page, durationMs) {
   const startTime = Date.now();
   const endTime = startTime + durationMs;
   
-  console.log(`[DEBUG] Starting page activity for ${durationMs}ms to ensure recording has content...`);
+  log(`Starting page activity for ${durationMs}ms to ensure recording has content...`);
   
-  // Frame timing variables
+  // Reset frame timing variables
   frameMetrics.startTime = startTime;
   frameMetrics.frameCount = 0;
   frameMetrics.lastFrameTime = startTime;
@@ -188,7 +188,7 @@ async function generatePageActivity(page, durationMs) {
         if (viewportSize) {
           const x = Math.floor(Math.random() * viewportSize.width);
           const y = Math.floor(Math.random() * viewportSize.height);
-          console.log(`[DEBUG] Moving mouse to ${x},${y}`);
+          log(`Moving mouse to ${x},${y}`);
           await page.mouse.move(x, y);
           
           // Record frame timing
@@ -199,11 +199,11 @@ async function generatePageActivity(page, durationMs) {
           frameMetrics.measurements.push(frameDuration);
         }
       } catch (mouseError) {
-        console.log(`[DEBUG] Mouse movement error: ${mouseError.message}`);
+        log(`Mouse movement error: ${mouseError.message}`);
         // Ignore mouse movement errors as the page might be closing
       }
     } catch (e) {
-      console.log(`[DEBUG] Page activity error: ${e.message}`);
+      log(`Page activity error: ${e.message}`);
       // Ignore errors during activity as page might be closing
     }
   };
@@ -225,14 +225,15 @@ async function generatePageActivity(page, durationMs) {
   const minFrameTime = frameTimes.length > 0 ? Math.min(...frameTimes) : 0;
   const maxFrameTime = frameTimes.length > 0 ? Math.max(...frameTimes) : 0;
   
-  console.log(`[DEBUG] Page activity completed with ${activityCount} mouse movements`);
-  console.log(`[DEBUG] Frame statistics: ${fps} FPS, Avg: ${avgFrameTime.toFixed(2)}ms, Min: ${minFrameTime}ms, Max: ${maxFrameTime}ms`);
+  log(`Page activity completed with ${activityCount} mouse movements`);
+  log(`Frame statistics: ${fps} FPS, Avg: ${avgFrameTime.toFixed(2)}ms, Min: ${minFrameTime}ms, Max: ${maxFrameTime}ms`);
   
   return {
     fps,
     avgFrameTime,
     minFrameTime,
-    maxFrameTime
+    maxFrameTime,
+    activityCount
   };
 }
 
@@ -786,22 +787,130 @@ async function recordWebsite(url, duration = 10) {
           // If we got good frame rates, use higher quality settings
           const achievedGoodFps = frameStats && frameStats.fps >= TARGET_FPS;
           
+          // Add hardware acceleration parameters if available
+          const useHardwareAcceleration = USE_HARDWARE_ACCELERATION || isDev;
+          const hwAccelParams = useHardwareAcceleration ? '-hwaccel auto -hwaccel_device 0 ' : '';
+          
           // Optimize ffmpeg parameters based on the frame rate we achieved
           if (isDev) {
             // Fast mode for development - speed over quality, but still decent
-            ffmpegCmd = `${FFMPEG_PATH} -y -i "${originalPath}" -c:v libvpx-vp9 -b:v 4M ${achievedGoodFps ? '-deadline realtime' : '-deadline good'} -cpu-used ${achievedGoodFps ? '4' : '2'} -pix_fmt yuv420p -quality ${achievedGoodFps ? 'realtime' : 'good'} -crf ${achievedGoodFps ? '22' : '20'} -speed ${achievedGoodFps ? '8' : '4'} -threads ${numCPUs} "${enhancedPath}"`;
+            ffmpegCmd = `${FFMPEG_PATH} -y ${hwAccelParams}-i "${originalPath}" -c:v libvpx-vp9 -b:v 4M ${achievedGoodFps ? '-deadline realtime' : '-deadline good'} -cpu-used ${achievedGoodFps ? '8' : '4'} -pix_fmt yuv420p -quality ${achievedGoodFps ? 'realtime' : 'good'} -crf ${achievedGoodFps ? '30' : '26'} -speed ${achievedGoodFps ? '8' : '6'} -tile-columns 6 -frame-parallel 1 -threads ${numCPUs} "${enhancedPath}"`;
           } else {
             // Balanced mode for production - good quality with reasonable speed
-            ffmpegCmd = `${FFMPEG_PATH} -y -i "${originalPath}" -c:v libvpx-vp9 -b:v 6M -deadline ${achievedGoodFps ? 'good' : 'best'} -cpu-used ${achievedGoodFps ? '2' : '0'} -pix_fmt yuv420p -quality good -crf ${achievedGoodFps ? '18' : '15'} -speed ${achievedGoodFps ? '2' : '1'} -threads ${numCPUs} "${enhancedPath}"`;
+            ffmpegCmd = `${FFMPEG_PATH} -y ${hwAccelParams}-i "${originalPath}" -c:v libvpx-vp9 -b:v 6M -deadline ${achievedGoodFps ? 'good' : 'best'} -cpu-used ${achievedGoodFps ? '4' : '2'} -pix_fmt yuv420p -quality good -crf ${achievedGoodFps ? '22' : '18'} -speed ${achievedGoodFps ? '3' : '2'} -tile-columns 4 -frame-parallel 1 -threads ${numCPUs} "${enhancedPath}"`;
           }
           
           // Add frame rate info to the log
-          log(`Enhancing video with ffmpeg (quality: ${achievedGoodFps ? 'optimized for speed' : 'optimized for quality'}): ${enhancedPath}`);
+          log(`Enhancing video with ffmpeg (quality: ${achievedGoodFps ? 'optimized for speed' : 'optimized for quality'}, hardware acceleration: ${useHardwareAcceleration ? 'enabled' : 'disabled'}): ${enhancedPath}`);
           log(`Measured performance: ${frameStats ? frameStats.fps + ' FPS' : 'No measurements available'}`);
           log(`ffmpeg command: ${ffmpegCmd}`);
           
           // Enhance video with ffmpeg for smoother playback
-          log(`Enhancing video with ffmpeg (fast mode: ${isDev}): ${enhancedPath}`);
+          try {
+            execSync(ffmpegCmd, { 
+              stdio: 'inherit',
+              timeout: 120000 // 120 second timeout for higher quality processing
+            });
+            
+            // If enhancement succeeded, use the enhanced file
+            if (fs.existsSync(enhancedPath) && fs.statSync(enhancedPath).size > 0) {
+              log(`Enhanced file exists: ${enhancedPath}, size: ${fs.statSync(enhancedPath).size} bytes`);
+              log(`Using enhanced video: ${enhancedPath}`);
+              return { 
+                fileName: path.basename(enhancedPath),
+                logFile: path.basename(logFilePath)
+              };
+            } else {
+              log(`Enhanced video creation failed or resulted in empty file. Using original video.`);
+              return { 
+                fileName: foundVideoFile.filename,
+                logFile: path.basename(logFilePath)
+              };
+            }
+          } catch (ffmpegCmdError) {
+            log(`FFmpeg command execution failed: ${ffmpegCmdError.message}`);
+            log(`Returning original unenhanced video file`);
+            return { 
+              fileName: foundVideoFile.filename,
+              logFile: path.basename(logFilePath)
+            };
+          }
+        } catch (ffmpegError) {
+          log(`FFmpeg enhancement failed: ${ffmpegError.message}`);
+          log(`FFmpeg error stack: ${ffmpegError.stack}`);
+          return { 
+            fileName: foundVideoFile.filename,
+            logFile: path.basename(logFilePath)
+          };
+        }
+      } catch (enhancementError) {
+        log(`Video enhancement error: ${enhancementError.message}`);
+        log(`Enhancement error stack: ${enhancementError.stack}`);
+        return { 
+          fileName: foundVideoFile.filename,
+          logFile: path.basename(logFilePath)
+        };
+      }
+    }
+    
+    log(`Using video file: ${foundVideoFile.filename} (${foundVideoFile.size} bytes)`);
+    
+    // After finding video file, try to improve its quality with ffmpeg if available
+    if (foundVideoFile) {
+      // Skip ffmpeg for invalid files - central check in one place with detailed logging
+      if (!isValidForFfmpeg(foundVideoFile)) {
+        log(`Skipping ffmpeg enhancement for invalid file: ${foundVideoFile.filename}`);
+        
+        // If we have a screenshot, prefer that over a tiny video file
+        if (screenshotTaken && fs.existsSync(screenshotPath) && foundVideoFile.size < 50000) {
+          log(`Returning screenshot (${screenshotFilename}) instead of small video file (${foundVideoFile.size} bytes)`);
+          return { 
+            fileName: screenshotFilename,
+            logFile: path.basename(logFilePath)
+          };
+        }
+        
+        return { 
+          fileName: foundVideoFile.filename,
+          logFile: path.basename(logFilePath)
+        };
+      }
+      
+      try {
+        // At this point, we know the file is valid for ffmpeg processing
+        const originalPath = foundVideoFile.path;
+        const enhancedPath = path.join(uploadsDir, `enhanced-${foundVideoFile.filename}`);
+        
+        try {
+          // Check if ffmpeg is available
+          log('Checking if ffmpeg is available');
+          execSync(`${FFMPEG_PATH} -version`, { stdio: 'ignore' });
+          
+          // Choose optimal encoding settings based on hardware capabilities and measured performance
+          let ffmpegCmd;
+          
+          // If we got good frame rates, use higher quality settings
+          const achievedGoodFps = frameStats && frameStats.fps >= TARGET_FPS;
+          
+          // Add hardware acceleration parameters if available
+          const useHardwareAcceleration = USE_HARDWARE_ACCELERATION || isDev;
+          const hwAccelParams = useHardwareAcceleration ? '-hwaccel auto -hwaccel_device 0 ' : '';
+          
+          // Optimize ffmpeg parameters based on the frame rate we achieved
+          if (isDev) {
+            // Fast mode for development - speed over quality, but still decent
+            ffmpegCmd = `${FFMPEG_PATH} -y ${hwAccelParams}-i "${originalPath}" -c:v libvpx-vp9 -b:v 4M ${achievedGoodFps ? '-deadline realtime' : '-deadline good'} -cpu-used ${achievedGoodFps ? '8' : '4'} -pix_fmt yuv420p -quality ${achievedGoodFps ? 'realtime' : 'good'} -crf ${achievedGoodFps ? '30' : '26'} -speed ${achievedGoodFps ? '8' : '6'} -tile-columns 6 -frame-parallel 1 -threads ${numCPUs} "${enhancedPath}"`;
+          } else {
+            // Balanced mode for production - good quality with reasonable speed
+            ffmpegCmd = `${FFMPEG_PATH} -y ${hwAccelParams}-i "${originalPath}" -c:v libvpx-vp9 -b:v 6M -deadline ${achievedGoodFps ? 'good' : 'best'} -cpu-used ${achievedGoodFps ? '4' : '2'} -pix_fmt yuv420p -quality good -crf ${achievedGoodFps ? '22' : '18'} -speed ${achievedGoodFps ? '3' : '2'} -tile-columns 4 -frame-parallel 1 -threads ${numCPUs} "${enhancedPath}"`;
+          }
+          
+          // Add frame rate info to the log
+          log(`Enhancing video with ffmpeg (quality: ${achievedGoodFps ? 'optimized for speed' : 'optimized for quality'}, hardware acceleration: ${useHardwareAcceleration ? 'enabled' : 'disabled'}): ${enhancedPath}`);
+          log(`Measured performance: ${frameStats ? frameStats.fps + ' FPS' : 'No measurements available'}`);
+          log(`ffmpeg command: ${ffmpegCmd}`);
+          
+          // Enhance video with ffmpeg for smoother playback
           try {
             execSync(ffmpegCmd, { 
               stdio: 'inherit',
