@@ -25,10 +25,10 @@ const totalMemory = os.totalmem();
 console.log(`System has ${numCPUs} CPU cores and ${Math.round(totalMemory / 1024 / 1024 / 1024)}GB total memory`);
 
 // Configure video optimization based on system resources
-const VIDEO_FPS = 30; // Increased to 30 FPS for smoother video
-const ACTIVITY_DELAY = 100; // Further decreased delay for smoother activity
-const VIDEO_WIDTH = 1024; // Reduced from 1280 to improve performance
-const VIDEO_HEIGHT = 576; // Reduced from 720 to improve performance (16:9 ratio maintained)
+const VIDEO_FPS = 60; // Increased to 30 FPS for smoother video
+const ACTIVITY_DELAY = 300; // Further decreased delay for smoother activity
+const VIDEO_WIDTH = 1920; // Reduced from 1280 to improve performance
+const VIDEO_HEIGHT = 1080; // Reduced from 720 to improve performance (16:9 ratio maintained)
 const FFMPEG_PATH = process.env.FFMPEG_PATH || 'ffmpeg'; // Path to ffmpeg for post-processing
 
 // Function to check if browsers are installed
@@ -163,7 +163,7 @@ async function recordWebsite(url, duration = 10) {
   try {
     browser = await chromium.launch({
       headless: true,
-      executablePath: process.env.CHROME_PATH || '/usr/bin/chromium-browser', // Use system Chromium with fallback
+      executablePath: process.env.CHROME_PATH, // Use environment variable if set, otherwise use Playwright's built-in browser
       chromiumSandbox: false, // Disable sandbox for better performance
       timeout: 60000, // Longer timeout for startup
       args: [
@@ -236,7 +236,6 @@ async function recordWebsite(url, duration = 10) {
         'Accept-Language': 'en-US,en;q=0.9'
       },
       offline: false,
-      permissions: ['animations']
     });
 
     // Force garbage collection to free memory before recording
