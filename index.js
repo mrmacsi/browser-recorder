@@ -424,6 +424,52 @@ app.post('/api/toggle-hardware-acceleration', async (req, res) => {
   }
 });
 
+// Add API endpoint to list all metrics files
+app.get('/api/metrics', (req, res) => {
+  try {
+    // Check if metrics directory exists
+    if (!fs.existsSync(metricsDir)) {
+      return res.status(404).json({
+        success: false,
+        error: 'Metrics directory not found'
+      });
+    }
+    
+    // Read the metrics directory
+    const files = fs.readdirSync(metricsDir)
+      .filter(file => file.endsWith('.log'))
+      .map(file => {
+        const filePath = path.join(metricsDir, file);
+        return {
+          name: file,
+          path: filePath,
+          size: fs.statSync(filePath).size,
+          time: fs.statSync(filePath).mtime.getTime()
+        };
+      })
+      .sort((a, b) => b.time - a.time); // Sort by most recent first
+    
+    // Return the list of metrics files
+    res.json({
+      success: true,
+      count: files.length,
+      files: files.map(file => ({
+        filename: file.name,
+        size: file.size,
+        time: new Date(file.time).toISOString(),
+        url: `/api/metrics/${file.name}`
+      }))
+    });
+  } catch (error) {
+    console.error('Error listing metrics files:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Server error',
+      message: error.message
+    });
+  }
+});
+
 // Create server based on environment
 let server;
 

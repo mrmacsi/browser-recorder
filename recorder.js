@@ -15,6 +15,17 @@ if (!fs.existsSync(logsDir)) {
 const metricsDir = path.resolve(__dirname, 'logs', 'metrics');
 if (!fs.existsSync(metricsDir)) {
   fs.mkdirSync(metricsDir, { recursive: true });
+  console.log(`[DEBUG] Created metrics directory: ${metricsDir}`);
+}
+
+// Verify metrics directory permissions
+try {
+  console.log(`[DEBUG] Metrics directory permissions:`);
+  execSync(`ls -la ${metricsDir}`, { stdio: 'inherit' });
+  console.log(`[DEBUG] Setting full permissions on metrics directory`);
+  execSync(`chmod -R 777 ${metricsDir}`, { stdio: 'inherit' });
+} catch (error) {
+  console.warn(`[DEBUG] Could not set metrics directory permissions: ${error.message}`);
 }
 
 // Function to create a logger for a specific recording session
@@ -23,9 +34,20 @@ function createSessionLogger(sessionId) {
   const logFilePath = path.join(logsDir, `recording-${sessionId}-${timestamp}.log`);
   const metricsFilePath = path.join(metricsDir, `metrics-${sessionId}-${timestamp}.log`);
   
+  console.log(`[DEBUG] Creating log file: ${logFilePath}`);
+  console.log(`[DEBUG] Creating metrics file: ${metricsFilePath}`);
+  
   // Create a write stream for the log file
   const logStream = fs.createWriteStream(logFilePath, { flags: 'a' });
   const metricsStream = fs.createWriteStream(metricsFilePath, { flags: 'a' });
+  
+  // Verify streams are created
+  console.log(`[DEBUG] Log stream created: ${!!logStream}`);
+  console.log(`[DEBUG] Metrics stream created: ${!!metricsStream}`);
+  
+  // Write initial test entries to verify streams work
+  logStream.write(`[${new Date().toISOString()}] Log file created for session ${sessionId}\n`);
+  metricsStream.write(`[${new Date().toISOString()}] Metrics file created for session ${sessionId}\n`);
   
   // Create a logger function that writes to both console and log file
   const logger = (message) => {
@@ -38,7 +60,12 @@ function createSessionLogger(sessionId) {
   const metricsLogger = (message) => {
     const timestampedMessage = `[${new Date().toISOString()}] ${message}`;
     console.log(`METRICS: ${timestampedMessage}`);
-    metricsStream.write(timestampedMessage + '\n');
+    try {
+      metricsStream.write(timestampedMessage + '\n');
+      console.log(`[DEBUG] Successfully wrote metrics: ${message.substring(0, 50)}...`);
+    } catch (err) {
+      console.error(`[DEBUG] Failed to write to metrics file: ${err.message}`);
+    }
   };
   
   // Return the logger function and file path
@@ -196,6 +223,11 @@ async function generatePageActivity(page, durationMs, logMetrics, log) {
   frameMetrics.lastFrameTime = startTime;
   frameMetrics.measurements = [];
   
+  log(`Initialized frameMetrics tracking: startTime=${startTime}`);
+  if (logMetrics) {
+    logMetrics(`ACTIVITY_START,TIME=${startTime},DURATION=${durationMs}ms`);
+  }
+  
   // Create a function to perform mouse movement only (no scrolling)
   const performActivity = async () => {
     try {
@@ -214,6 +246,10 @@ async function generatePageActivity(page, durationMs, logMetrics, log) {
           frameMetrics.frameCount++;
           frameMetrics.lastFrameTime = now;
           frameMetrics.measurements.push(frameDuration);
+          
+          if (frameMetrics.frameCount % 10 === 0) {
+            log(`Processed ${frameMetrics.frameCount} frames so far`);
+          }
         }
       } catch (mouseError) {
         log(`Mouse movement error: ${mouseError.message}`);
@@ -247,9 +283,16 @@ async function generatePageActivity(page, durationMs, logMetrics, log) {
   
   // Log metrics to the dedicated metrics file
   if (logMetrics) {
+    log(`Writing frame metrics to metrics file: FPS=${fps}`);
     logMetrics(`FRAME_METRICS,${fps},${avgFrameTime.toFixed(2)},${minFrameTime},${maxFrameTime},${activityCount}`);
     logMetrics(`FRAME_STATS,FPS=${fps},AVG_TIME=${avgFrameTime.toFixed(2)}ms,MIN=${minFrameTime}ms,MAX=${maxFrameTime}ms`);
     logMetrics(`ACTIVITY_COUNT=${activityCount},DURATION=${totalDuration}ms,TARGET_FPS=${TARGET_FPS}`);
+    
+    // Write raw frame data for detailed analysis (limit to first 100 frames to avoid huge files)
+    const framesToLog = frameTimes.slice(0, 100);
+    logMetrics(`RAW_FRAME_TIMES,${framesToLog.join(',')}`);
+  } else {
+    log(`WARNING: logMetrics function not provided, metrics not being saved to file`);
   }
   
   return {
@@ -365,6 +408,23 @@ async function recordWebsite(url, duration = 10) {
   logMetrics(`VIDEO_SETTINGS,WIDTH=${VIDEO_WIDTH},HEIGHT=${VIDEO_HEIGHT},FPS=${VIDEO_FPS},TARGET_FPS=${TARGET_FPS}`);
   log(`Hardware acceleration: ${USE_HARDWARE_ACCELERATION ? 'Enabled' : 'Disabled'}`);
   logMetrics(`HARDWARE_ACCELERATION=${USE_HARDWARE_ACCELERATION ? 'Enabled' : 'Disabled'}`);
+  
+  // Double-check that metrics directory exists
+  if (!fs.existsSync(metricsDir)) {
+    log(`Metrics directory does not exist, creating it now...`);
+    try {
+      fs.mkdirSync(metricsDir, { recursive: true });
+      log(`Metrics directory created at ${metricsDir}`);
+      execSync(`chmod -R 777 ${metricsDir}`, { stdio: 'inherit' });
+      log(`Set full permissions on metrics directory`);
+    } catch (mkdirError) {
+      log(`Failed to create metrics directory: ${mkdirError.message}`);
+    }
+  }
+  
+  // Verify metrics file path
+  log(`Metrics will be saved to: ${metricsFilePath}`);
+  logMetrics(`METRICS_FILE_CHECK=Path is ${metricsFilePath}`);
   
   // Double-check that uploads directory exists
   if (!fs.existsSync(uploadsDir)) {
@@ -590,11 +650,44 @@ async function recordWebsite(url, duration = 10) {
       let frameStats = null;
       if (!DISABLE_PAGE_ACTIVITY) {
         log(`Generating initial page activity...`);
+        
+        // Double-check logMetrics function is available
+        if (!logMetrics) {
+          log(`WARNING: logMetrics function not available, creating fallback`);
+          // Create a fallback metrics logger that only logs to console
+          logMetrics = (message) => {
+            console.log(`METRICS FALLBACK: ${message}`);
+          };
+        } else {
+          // Test the metrics logging
+          logMetrics(`PRE_ACTIVITY_TEST,TIME=${Date.now()}`);
+          log(`Metrics logging test performed`);
+        }
+        
         // Generate activity for longer duration to ensure recording works
         frameStats = await generatePageActivity(page, 5000, logMetrics, log);
         log(`Frame rate statistics: ${frameStats.fps} FPS, Avg frame time: ${frameStats.avgFrameTime.toFixed(2)}ms`);
-        logMetrics(`RECORDING_STATS,FPS=${frameStats.fps},AVG_FRAME_TIME=${frameStats.avgFrameTime.toFixed(2)}ms,MIN=${frameStats.minFrameTime}ms,MAX=${frameStats.maxFrameTime}ms`);
+        
+        // Log to both normal log and metrics log
+        const metricsMessage = `RECORDING_STATS,FPS=${frameStats.fps},AVG_FRAME_TIME=${frameStats.avgFrameTime.toFixed(2)}ms,MIN=${frameStats.minFrameTime}ms,MAX=${frameStats.maxFrameTime}ms`;
+        log(metricsMessage); // Log to regular log file
+        logMetrics(metricsMessage); // Log to metrics file
+        
         log(`Frame time range: Min=${frameStats.minFrameTime}ms, Max=${frameStats.maxFrameTime}ms`);
+        
+        // Flush metrics to ensure they're written
+        try {
+          fs.readdir(metricsDir, (err, files) => {
+            if (err) {
+              log(`Error reading metrics directory: ${err.message}`);
+            } else {
+              log(`Metrics directory contains ${files.length} files after recording`);
+            }
+          });
+        } catch (err) {
+          log(`Error checking metrics directory: ${err.message}`);
+        }
+        
         hasContent = true;
         
         // Wait for the remainder of the recording time
