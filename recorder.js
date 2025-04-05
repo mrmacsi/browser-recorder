@@ -507,8 +507,31 @@ async function recordWebsite(url, duration = 10) {
     if (foundVideoFile) {
       try {
         // Check if the file is too small to be a valid video (likely a blank file)
-        if (foundVideoFile.size < 1000) {
+        // Increased minimum size to 10KB to ensure it's a valid video
+        if (foundVideoFile.size < 10000) {
           console.log(`[DEBUG] File size (${foundVideoFile.size} bytes) is too small for a valid video. Skipping enhancement.`);
+          // If filename starts with 'blank-', it's a placeholder we created
+          if (foundVideoFile.filename.startsWith('blank-')) {
+            console.log(`[DEBUG] Detected blank placeholder file. Skipping enhancement.`);
+          }
+          return foundVideoFile.filename;
+        }
+        
+        // Verify file exists and is readable before proceeding
+        if (!fs.existsSync(foundVideoFile.path) || !fs.statSync(foundVideoFile.path).isFile()) {
+          console.log(`[DEBUG] Video file does not exist or is not a file: ${foundVideoFile.path}`);
+          return foundVideoFile.filename;
+        }
+        
+        // Additional check: make sure the file contains valid data
+        try {
+          const fileData = fs.readFileSync(foundVideoFile.path, { encoding: null, flag: 'r' });
+          if (!fileData || fileData.length < 10000) {
+            console.log(`[DEBUG] File contains insufficient data for ffmpeg processing: ${fileData ? fileData.length : 0} bytes`);
+            return foundVideoFile.filename;
+          }
+        } catch (readError) {
+          console.warn(`[DEBUG] Could not read file for validation: ${readError.message}`);
           return foundVideoFile.filename;
         }
         
