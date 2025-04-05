@@ -30,22 +30,12 @@ const metricsDir = path.resolve(__dirname, 'logs', 'metrics');
 const uploadsDir = path.resolve(__dirname, 'uploads');
 const tempVideoDir = path.resolve(__dirname, 'temp_videos');
 
-// Create necessary directories with better error handling
-function ensureDirectoryExists(dir) {
-  try {
-    if (!fs.existsSync(dir)) {
-      console.log(`Creating directory: ${dir}`);
-      fs.mkdirSync(dir, { recursive: true });
-    }
-    return true;
-  } catch (error) {
-    console.error(`Failed to create directory ${dir}: ${error.message}`);
-    return false;
+// Create necessary directories
+[logsDir, metricsDir, uploadsDir, tempVideoDir].forEach(dir => {
+  if (!fs.existsSync(dir)) {
+    fs.mkdirSync(dir, { recursive: true });
   }
-}
-
-// Ensure all required directories exist
-[logsDir, metricsDir, uploadsDir, tempVideoDir].forEach(ensureDirectoryExists);
+});
 
 // Determine optimal temp directory with improved memory management
 const isAzureVM = fs.existsSync('/mnt/resource');
@@ -376,83 +366,41 @@ const RESOLUTIONS = {
 
 // API endpoint for recording with platform dimensions
 async function recordWithPlatformSettings(url, options = {}) {
-  const {
-    platform = 'STANDARD_16_9',
-    resolution = '1080p',
-    duration = 10,
-    quality = 'balanced',
-    fps = 30,
-    speed = 1
-  } = options;
+  // Set defaults
+  const platform = options.platform?.toUpperCase() || 'STANDARD_16_9';
+  const resolution = options.resolution || '1080p';
+  const duration = options.duration || 10;
+  const quality = options.quality || 'balanced';
+  const fps = options.fps || VIDEO_FPS;
 
-  // Set dimensions based on platform
-  let width, height;
-  switch (platform) {
-    case 'VERTICAL_9_16':
-      switch (resolution) {
-        case '720p': width = 720; height = 1280; break;
-        case '1080p': width = 1080; height = 1920; break;
-        case '2k': width = 1440; height = 2560; break;
-        default: width = 1080; height = 1920;
-      }
-      break;
-    case 'SQUARE':
-      switch (resolution) {
-        case '720p': width = 720; height = 720; break;
-        case '1080p': width = 1080; height = 1080; break;
-        case '2k': width = 1440; height = 1440; break;
-        default: width = 1080; height = 1080;
-      }
-      break;
-    case 'STANDARD_16_9':
-    default:
-      switch (resolution) {
-        case '720p': width = 1280; height = 720; break;
-        case '1080p': width = 1920; height = 1080; break;
-        case '2k': width = 2560; height = 1440; break;
-        default: width = 1920; height = 1080;
-      }
+  // Validate platform
+  if (!DIMENSIONS[platform]) {
+    throw new Error(`Invalid platform: ${options.platform}. Supported platforms: SQUARE, VERTICAL_9_16, STANDARD_16_9`);
   }
 
-  // Set quality settings
-  const qualitySettings = {
-    low: {
-      bitrate: '4M',
-      preset: 'realtime',
-      twoPass: false,
-      pixFormat: 'yuv420p'
-    },
-    balanced: {
-      bitrate: '8M',
-      preset: 'good',
-      twoPass: false,
-      pixFormat: 'yuv420p'
-    },
-    high: {
-      bitrate: '16M',
-      preset: 'good',
-      twoPass: true,
-      pixFormat: 'yuv444p'
-    }
-  };
+  // Validate resolution
+  if (!RESOLUTIONS[resolution]) {
+    throw new Error(`Invalid resolution: ${resolution}. Supported resolutions: 720p, 1080p, 2k`);
+  }
 
-  const qualityConfig = qualitySettings[quality] || qualitySettings.balanced;
+  // Get dimensions from presets
+  const width = DIMENSIONS[platform].width[resolution];
+  const height = DIMENSIONS[platform].height[resolution];
+  
+  // Ensure width is even (required for some encoders)
+  const adjustedWidth = width % 2 === 0 ? width : width + 1;
 
-  // Merge all options for recordWebsite
-  const recordOptions = {
-    viewportWidth: width,
-    viewportHeight: height,
-    videoWidth: width,
-    videoHeight: height,
+  console.log(`Recording with ${platform} format (${adjustedWidth}x${height}) at ${resolution} resolution`);
+
+  // Record with specified dimensions and enforce aspect ratio
+  return await recordWebsite(url, duration, {
+    width: adjustedWidth,
+    height,
     fps,
-    bitrate: qualityConfig.bitrate,
-    qualityPreset: qualityConfig.preset,
-    twoPassEncoding: qualityConfig.twoPass,
-    pixFormat: qualityConfig.pixFormat,
-    speed
-  };
-
-  return recordWebsite(url, duration, recordOptions);
+    quality,
+    platform,
+    aspectRatio: DIMENSIONS[platform].aspect
+  });
 }
 
 // Record a website with balanced quality
@@ -460,15 +408,6 @@ async function recordWebsite(url, duration = 10, options = {}) {
   const sessionId = uuidv4().substr(0, 8);
   const { log, logMetrics, logFilePath, metricsFilePath } = createSessionLogger(sessionId);
   const sessionStartTime = Date.now();
-  
-  // Ensure uploads directory exists before recording
-  if (!ensureDirectoryExists(uploadsDir)) {
-    log(`ERROR: Uploads directory ${uploadsDir} could not be created or accessed`);
-    return { 
-      error: "Failed to create or access uploads directory",
-      logFile: path.basename(logFilePath)
-    };
-  }
   
   // Allow overriding default settings through options
   const videoWidth = options.width || VIDEO_WIDTH;
