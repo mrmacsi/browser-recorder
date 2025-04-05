@@ -342,104 +342,6 @@ async function ensureBrowsersInstalled() {
   }
 }
 
-// Helper function to generate a random animation on the page
-async function generatePageActivity(page, durationMs, logMetrics, log) {
-  const startTime = Date.now();
-  const endTime = startTime + durationMs;
-  
-  log(`Starting page activity for ${durationMs}ms to ensure recording has content...`);
-  
-  // Reset frame timing variables
-  frameMetrics.startTime = startTime;
-  frameMetrics.frameCount = 0;
-  frameMetrics.lastFrameTime = startTime;
-  frameMetrics.measurements = [];
-  
-  log(`Initialized frameMetrics tracking: startTime=${startTime}`);
-  if (logMetrics) {
-    logMetrics(`ACTIVITY_START,TIME=${startTime},DURATION=${durationMs}ms`);
-  }
-  
-  // Create a function to perform mouse movement only (no scrolling)
-  const performActivity = async () => {
-    try {
-      // Only move mouse randomly (if the page is still active)
-      try {
-        const viewportSize = await page.viewportSize();
-        if (viewportSize) {
-          const x = Math.floor(Math.random() * viewportSize.width);
-          const y = Math.floor(Math.random() * viewportSize.height);
-          log(`Moving mouse to ${x},${y}`);
-          await page.mouse.move(x, y);
-          
-          // Record frame timing
-          const now = Date.now();
-          const frameDuration = now - frameMetrics.lastFrameTime;
-          frameMetrics.frameCount++;
-          frameMetrics.lastFrameTime = now;
-          frameMetrics.measurements.push(frameDuration);
-          
-          if (frameMetrics.frameCount % 10 === 0) {
-            log(`Processed ${frameMetrics.frameCount} frames so far`);
-          }
-        }
-      } catch (mouseError) {
-        log(`Mouse movement error: ${mouseError.message}`);
-        // Ignore mouse movement errors as the page might be closing
-      }
-    } catch (e) {
-      log(`Page activity error: ${e.message}`);
-      // Ignore errors during activity as page might be closing
-    }
-  };
-  
-  // Perform activity until the duration is complete
-  let activityCount = 0;
-  while (Date.now() < endTime) {
-    await performActivity();
-    activityCount++;
-    // Wait a short time between activities
-    await new Promise(resolve => setTimeout(resolve, ACTIVITY_DELAY));
-  }
-  
-  // Calculate frame rate statistics
-  const totalDuration = Date.now() - startTime;
-  const fps = Math.round((frameMetrics.frameCount * 1000) / totalDuration);
-  const frameTimes = frameMetrics.measurements;
-  const avgFrameTime = frameTimes.length > 0 ? frameTimes.reduce((a, b) => a + b, 0) / frameTimes.length : 0;
-  const minFrameTime = frameTimes.length > 0 ? Math.min(...frameTimes) : 0;
-  const maxFrameTime = frameTimes.length > 0 ? Math.max(...frameTimes) : 0;
-  
-  // Log to regular log regardless of metrics logger availability
-  log(`Page activity completed with ${activityCount} mouse movements`);
-  log(`Frame statistics: ${fps} FPS, Avg: ${avgFrameTime.toFixed(2)}ms, Min: ${minFrameTime}ms, Max: ${maxFrameTime}ms`);
-  log(`FRAME_METRICS,${fps},${avgFrameTime.toFixed(2)},${minFrameTime},${maxFrameTime},${activityCount}`);
-  log(`FRAME_STATS,FPS=${fps},AVG_TIME=${avgFrameTime.toFixed(2)}ms,MIN=${minFrameTime}ms,MAX=${maxFrameTime}ms`);
-  log(`ACTIVITY_COUNT=${activityCount},DURATION=${totalDuration}ms,TARGET_FPS=${TARGET_FPS}`);
-  
-  // Log metrics to the dedicated metrics file if available
-  if (logMetrics) {
-    log(`Writing frame metrics to metrics file: FPS=${fps}`);
-    logMetrics(`FRAME_METRICS,${fps},${avgFrameTime.toFixed(2)},${minFrameTime},${maxFrameTime},${activityCount}`);
-    logMetrics(`FRAME_STATS,FPS=${fps},AVG_TIME=${avgFrameTime.toFixed(2)}ms,MIN=${minFrameTime}ms,MAX=${maxFrameTime}ms`);
-    logMetrics(`ACTIVITY_COUNT=${activityCount},DURATION=${totalDuration}ms,TARGET_FPS=${TARGET_FPS}`);
-    
-    // Write raw frame data for detailed analysis (limit to first 100 frames to avoid huge files)
-    const framesToLog = frameTimes.slice(0, 100);
-    logMetrics(`RAW_FRAME_TIMES,${framesToLog.join(',')}`);
-  } else {
-    log(`WARNING: logMetrics function not provided, metrics not being saved to file`);
-  }
-  
-  return {
-    fps,
-    avgFrameTime,
-    minFrameTime,
-    maxFrameTime,
-    activityCount
-  };
-}
-
 // Function to look for video files in a specified directory
 function findVideoFiles(directory) {
   if (!fs.existsSync(directory)) {
@@ -812,7 +714,6 @@ async function recordWebsite(url, duration = 10) {
         }
         
         // Generate activity for longer duration to ensure recording works
-        frameStats = await generatePageActivity(page, 5000, logMetrics, log);
         log(`Frame rate statistics: ${frameStats.fps} FPS, Avg frame time: ${frameStats.avgFrameTime.toFixed(2)}ms`);
         
         // Log to both normal log and metrics log
