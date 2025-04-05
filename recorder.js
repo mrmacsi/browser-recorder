@@ -184,7 +184,7 @@ async function ensureBrowsersInstalled() {
 }
 
 // Helper function to generate a random animation on the page
-async function generatePageActivity(page, durationMs, logMetrics) {
+async function generatePageActivity(page, durationMs, logMetrics, log) {
   const startTime = Date.now();
   const endTime = startTime + durationMs;
   
@@ -591,7 +591,7 @@ async function recordWebsite(url, duration = 10) {
       if (!DISABLE_PAGE_ACTIVITY) {
         log(`Generating initial page activity...`);
         // Generate activity for longer duration to ensure recording works
-        frameStats = await generatePageActivity(page, 5000, logMetrics);
+        frameStats = await generatePageActivity(page, 5000, logMetrics, log);
         log(`Frame rate statistics: ${frameStats.fps} FPS, Avg frame time: ${frameStats.avgFrameTime.toFixed(2)}ms`);
         logMetrics(`RECORDING_STATS,FPS=${frameStats.fps},AVG_FRAME_TIME=${frameStats.avgFrameTime.toFixed(2)}ms,MIN=${frameStats.minFrameTime}ms,MAX=${frameStats.maxFrameTime}ms`);
         log(`Frame time range: Min=${frameStats.minFrameTime}ms, Max=${frameStats.maxFrameTime}ms`);

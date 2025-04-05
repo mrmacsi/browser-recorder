@@ -2,9 +2,12 @@ const express = require('express');
 const cors = require('cors');
 const path = require('path');
 const fs = require('fs');
-const { recordWebsite, getLatestLogFile } = require('./recorder');
+const recorder = require('./recorder');
 const http = require('http');
 const https = require('https');
+
+// Get the recordWebsite function from the recorder module
+const { recordWebsite, getLatestLogFile } = recorder;
 
 // Ensure uploads directory exists
 const uploadsDir = path.join(__dirname, 'uploads');
