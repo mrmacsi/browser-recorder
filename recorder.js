@@ -308,10 +308,16 @@ async function recordWebsite(url, duration = 10) {
     throw browserInstallError;
   }
   
-  // Generate blank file name if needed
-  const blankFilename = `blank-${uuidv4()}.webm`;
-  const blankPath = path.join(uploadsDir, blankFilename);
-  console.log(`[DEBUG] Generated blank filename: ${blankFilename}`);
+  // Generate a proper filename for this recording
+  const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+  const recordingId = uuidv4().substr(0, 8);
+  const videoFilename = `recording-${recordingId}-${timestamp}.webm`;
+  const videoPath = path.join(uploadsDir, videoFilename);
+  console.log(`[DEBUG] Generated recording filename: ${videoFilename}`);
+  
+  // Create a fallback screenshot in case video recording fails
+  const screenshotFilename = `screenshot-${recordingId}-${timestamp}.png`;
+  const screenshotPath = path.join(uploadsDir, screenshotFilename);
   
   // Launch browser with appropriate configuration
   let browser;
@@ -435,6 +441,19 @@ async function recordWebsite(url, duration = 10) {
     const page = await context.newPage();
     console.log('[DEBUG] Page created successfully');
     
+    // Flag to track if we have any successful content
+    let hasContent = false;
+
+    // Take a screenshot as a fallback for when video doesn't work
+    let screenshotTaken = false;
+    try {
+      await page.screenshot({ path: screenshotPath });
+      screenshotTaken = true;
+      console.log(`[DEBUG] Fallback screenshot saved to ${screenshotPath}`);
+    } catch (screenshotError) {
+      console.error(`[DEBUG] Failed to take fallback screenshot: ${screenshotError.message}`);
+    }
+    
     console.log(`[DEBUG] Loading page: ${url}`);
     try {
       // Navigate to the URL with optimized wait conditions
@@ -453,6 +472,9 @@ async function recordWebsite(url, duration = 10) {
       
       // Check page content
       console.log('[DEBUG] Page title:', await page.title());
+      if (await page.title()) {
+        hasContent = true;
+      }
       
       // Take a screenshot for debugging
       try {
@@ -468,6 +490,7 @@ async function recordWebsite(url, duration = 10) {
         console.log(`[DEBUG] Generating initial page activity...`);
         // Generate activity for longer duration to ensure recording works
         await generatePageActivity(page, 5000);
+        hasContent = true;
         
         // Wait for the remainder of the recording time
         const remainingTime = (duration * 1000) - 5000;
@@ -494,11 +517,24 @@ async function recordWebsite(url, duration = 10) {
     console.log('[DEBUG] Closing page to end recording');
     await page.close();
     console.log(`[DEBUG] Page closed, waiting for video to be saved...`);
-    const videoPath = await context.close();
-    console.log(`[DEBUG] Context closed, video path: ${videoPath || 'undefined'}`);
+    const recordedVideoPath = await context.close();
+    console.log(`[DEBUG] Context closed, video path: ${recordedVideoPath || 'undefined'}`);
     
     // Look for the most recently created video file
     let foundVideoFile;
+    
+    // Check if video recording was successful
+    let videoRecordingSuccessful = recordedVideoPath && fs.existsSync(recordedVideoPath) && 
+                                   fs.statSync(recordedVideoPath).size > 10000;
+    
+    if (videoRecordingSuccessful) {
+      console.log(`[DEBUG] Video recording successful! Path: ${recordedVideoPath}, Size: ${fs.statSync(recordedVideoPath).size} bytes`);
+    } else {
+      console.log(`[DEBUG] Video recording failed or produced invalid file: ${recordedVideoPath || 'undefined'}`);
+      if (recordedVideoPath && fs.existsSync(recordedVideoPath)) {
+        console.log(`[DEBUG] Video file exists but size is only ${fs.statSync(recordedVideoPath).size} bytes`);
+      }
+    }
     
     // Debug what's in the temp directory
     console.log(`[DEBUG] Contents of temp directory (${tempDir}):`);
@@ -508,17 +544,17 @@ async function recordWebsite(url, duration = 10) {
       console.warn(`[DEBUG] Could not list temp directory contents: ${error.message}`);
     }
     
-    // If using RAM disk, copy the file to uploads directory
-    if (useRamDisk && videoPath && fs.existsSync(videoPath)) {
-      const destFile = path.join(uploadsDir, path.basename(videoPath));
-      console.log(`[DEBUG] Copying video from temp directory: ${videoPath} to ${destFile}`);
+    // If using RAM disk and video recording was successful, copy the file to uploads directory
+    if (useRamDisk && videoRecordingSuccessful) {
+      const destFile = path.join(uploadsDir, path.basename(recordedVideoPath));
+      console.log(`[DEBUG] Copying video from temp directory: ${recordedVideoPath} to ${destFile}`);
       try {
-        fs.copyFileSync(videoPath, destFile);
+        fs.copyFileSync(recordedVideoPath, destFile);
         console.log(`[DEBUG] File copy succeeded`);
         
         try {
-          fs.unlinkSync(videoPath); // Remove the temp file
-          console.log(`[DEBUG] Removed temp file: ${videoPath}`);
+          fs.unlinkSync(recordedVideoPath); // Remove the temp file
+          console.log(`[DEBUG] Removed temp file: ${recordedVideoPath}`);
         } catch (unlinkError) {
           console.warn(`[DEBUG] Failed to remove temp file: ${unlinkError.message}`);
         }
@@ -535,8 +571,18 @@ async function recordWebsite(url, duration = 10) {
       } catch (copyError) {
         console.error(`[DEBUG] File copy failed: ${copyError.message}`);
         console.error(`[DEBUG] Copy error stack: ${copyError.stack}`);
+        videoRecordingSuccessful = false;
       }
+    } else if (!useRamDisk && videoRecordingSuccessful) {
+      // If not using RAM disk but video recording was successful
+      foundVideoFile = {
+        filename: path.basename(recordedVideoPath),
+        path: recordedVideoPath,
+        size: fs.statSync(recordedVideoPath).size
+      };
+      console.log(`[DEBUG] Using direct video file: ${foundVideoFile.filename}, size: ${foundVideoFile.size} bytes`);
     } else {
+      // Try to find any valid recording in the uploads directory
       console.log(`[DEBUG] Looking for recording in uploads directory: ${uploadsDir}`);
       foundVideoFile = findPlaywrightRecording(uploadsDir);
     }
@@ -544,19 +590,39 @@ async function recordWebsite(url, duration = 10) {
     console.log(`[DEBUG] Video file found: ${foundVideoFile ? 'yes' : 'no'}`);
     
     // Handle the case where no video was found
-    if (!foundVideoFile) {
-      console.warn(`[DEBUG] No video was produced by Playwright`);
+    if (!foundVideoFile || foundVideoFile.size < 10000) {
+      console.warn(`[DEBUG] No valid video was produced by Playwright or file is too small`);
       
-      // Create a blank file as a placeholder
-      console.log(`[DEBUG] Creating blank file as placeholder: ${blankPath}`);
-      try {
-        fs.writeFileSync(blankPath, "NO_VIDEO_RECORDED");
-        console.log(`[DEBUG] Created blank file at ${blankPath}`);
-      } catch (writeError) {
-        console.error(`[DEBUG] Failed to write blank file: ${writeError.message}`);
+      // Return the screenshot if it was taken successfully
+      if (screenshotTaken && fs.existsSync(screenshotPath)) {
+        console.log(`[DEBUG] Returning screenshot instead of video: ${screenshotFilename}`);
+        return screenshotFilename;
       }
       
-      return blankFilename;
+      // Create a video placeholder with the proper naming scheme
+      console.log(`[DEBUG] Creating placeholder video file: ${videoFilename}`);
+      try {
+        fs.writeFileSync(videoPath, "NO_VIDEO_RECORDED");
+        console.log(`[DEBUG] Created placeholder file at ${videoPath}`);
+        
+        // Return proper video filename for better UX
+        return videoFilename;
+      } catch (writeError) {
+        console.error(`[DEBUG] Failed to write placeholder file: ${writeError.message}`);
+        
+        // Last resort fallback: generate a blank file with proper naming
+        const fallbackFilename = `video-fallback-${recordingId}.webm`;
+        const fallbackPath = path.join(uploadsDir, fallbackFilename);
+        try {
+          fs.writeFileSync(fallbackPath, "VIDEO_RECORDING_FAILED");
+          console.log(`[DEBUG] Created fallback placeholder: ${fallbackFilename}`);
+          return fallbackFilename;
+        } catch (fallbackError) {
+          console.error(`[DEBUG] All recording methods failed: ${fallbackError.message}`);
+          // Just return the name, we've tried our best
+          return videoFilename;
+        }
+      }
     }
     
     console.log(`[DEBUG] Using video file: ${foundVideoFile.filename} (${foundVideoFile.size} bytes)`);
@@ -566,6 +632,13 @@ async function recordWebsite(url, duration = 10) {
       // Skip ffmpeg for invalid files - central check in one place with detailed logging
       if (!isValidForFfmpeg(foundVideoFile)) {
         console.log(`[DEBUG] Skipping ffmpeg enhancement for invalid file: ${foundVideoFile.filename}`);
+        
+        // If we have a screenshot, prefer that over a tiny video file
+        if (screenshotTaken && fs.existsSync(screenshotPath) && foundVideoFile.size < 50000) {
+          console.log(`[DEBUG] Returning screenshot (${screenshotFilename}) instead of small video file (${foundVideoFile.size} bytes)`);
+          return screenshotFilename;
+        }
+        
         return foundVideoFile.filename;
       }
       
