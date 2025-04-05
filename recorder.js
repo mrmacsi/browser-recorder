@@ -3,1089 +3,752 @@ const path = require('path');
 const { v4: uuidv4 } = require('uuid');
 const fs = require('fs');
 const os = require('os');
-const { execSync } = require('child_process');
+const { execSync, spawn } = require('child_process');
 
-// Create logs directory if it doesn't exist
+// Balanced video configuration for speed and quality
+const VIDEO_FPS = 60;
+const VIDEO_WIDTH = 2560;  // 2K resolution (faster than 4K)
+const VIDEO_HEIGHT = 1440;
+const VIDEO_BITRATE = '12M';  // 12 Mbps for good quality
+const FFMPEG_PATH = process.env.FFMPEG_PATH || 'ffmpeg';
+const USE_HARDWARE_ACCELERATION = true;
+const CODEC = 'libvpx-vp9';
+const QUALITY_PRESET = 'good'; // Balanced preset
+const TWO_PASS_ENCODING = false; // Single-pass for speed
+const THREAD_COUNT = 8; // Use all available cores
+
+// System-specific optimization
+const AVAILABLE_CORES = 8;
+const AVAILABLE_MEMORY = 16; // GB
+
+// Debugging flag - set to true for verbose file system operations
+const DEBUG_FILE_OPERATIONS = true;
+
+// Initialize directories
 const logsDir = path.resolve(__dirname, 'logs');
-if (!fs.existsSync(logsDir)) {
-  fs.mkdirSync(logsDir, { recursive: true });
-}
-
-// Create metrics directory specifically for performance data
 const metricsDir = path.resolve(__dirname, 'logs', 'metrics');
-if (!fs.existsSync(metricsDir)) {
-  fs.mkdirSync(metricsDir, { recursive: true });
-  console.log(`[DEBUG] Created metrics directory: ${metricsDir}`);
+const uploadsDir = path.resolve(__dirname, 'uploads');
+const tempVideoDir = path.resolve(__dirname, 'temp_videos');
+
+// Create necessary directories
+[logsDir, metricsDir, uploadsDir, tempVideoDir].forEach(dir => {
+  if (!fs.existsSync(dir)) {
+    fs.mkdirSync(dir, { recursive: true });
+  }
+});
+
+// Determine optimal temp directory with improved memory management
+const isAzureVM = fs.existsSync('/mnt/resource');
+const ramDiskExists = fs.existsSync('/mnt/ramdisk');
+const azureTempDir = '/mnt/resource/browser-recorder/temp';
+
+// Choose the best temp directory available
+let tempDir;
+if (isAzureVM && fs.existsSync(azureTempDir)) {
+  tempDir = azureTempDir;
+} else if (ramDiskExists) {
+  tempDir = '/mnt/ramdisk';
+} else {
+  tempDir = tempVideoDir; // Use our dedicated temp directory
 }
 
-// Also create a backup metrics directory in a location that should always be writable
-const backupMetricsDir = path.join(os.tmpdir(), 'browser-recorder-metrics');
-if (!fs.existsSync(backupMetricsDir)) {
-  fs.mkdirSync(backupMetricsDir, { recursive: true });
-  console.log(`[DEBUG] Created backup metrics directory: ${backupMetricsDir}`);
-}
-
-// Verify metrics directory permissions
-try {
-  console.log(`[DEBUG] Metrics directory permissions:`);
-  execSync(`ls -la ${metricsDir}`, { stdio: 'inherit' });
-  console.log(`[DEBUG] Setting full permissions on metrics directory`);
-  execSync(`chmod -R 777 ${metricsDir}`, { stdio: 'inherit' });
-} catch (error) {
-  console.warn(`[DEBUG] Could not set metrics directory permissions: ${error.message}`);
-}
-
-// Function to create a logger for a specific recording session
+// Enhanced logger for monitoring recording performance
 function createSessionLogger(sessionId) {
   const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
   const logFilePath = path.join(logsDir, `recording-${sessionId}-${timestamp}.log`);
   const metricsFilePath = path.join(metricsDir, `metrics-${sessionId}-${timestamp}.log`);
-  const backupMetricsFilePath = path.join(backupMetricsDir, `metrics-${sessionId}-${timestamp}.log`);
   
-  console.log(`[DEBUG] Creating log file: ${logFilePath}`);
-  console.log(`[DEBUG] Creating metrics file: ${metricsFilePath}`);
-  console.log(`[DEBUG] Creating backup metrics file: ${backupMetricsFilePath}`);
+  // Create write streams
+  const logStream = fs.createWriteStream(logFilePath, { flags: 'a' });
+  const metricsStream = fs.createWriteStream(metricsFilePath, { flags: 'a' });
   
-  // First check permissions on directories
-  try {
-    console.log(`[DEBUG] Checking directory write permissions`);
-    
-    // Make sure metrics directory exists and has proper permissions
-    if (!fs.existsSync(metricsDir)) {
-      console.log(`[DEBUG] Metrics directory doesn't exist, creating it`);
-      fs.mkdirSync(metricsDir, { recursive: true });
-    }
-    
-    // Force permissions on metrics directory using system command
-    try {
-      console.log(`[DEBUG] Setting 777 permissions on metrics directory using system command`);
-      execSync(`chmod -R 777 "${metricsDir}"`, { stdio: 'inherit' });
-    } catch (chmodError) {
-      console.log(`[DEBUG] chmod command failed: ${chmodError.message}`);
-    }
-    
-    // Test if we can create a test file in the metrics directory
-    const testFile = path.join(metricsDir, `test-metrics-${Date.now()}.log`);
-    try {
-      fs.writeFileSync(testFile, "Test metrics file created\n");
-      console.log(`[DEBUG] Successfully created test metrics file: ${testFile}`);
-      
-      // Check if test file exists and is readable
-      if (fs.existsSync(testFile)) {
-        console.log(`[DEBUG] Test file exists and is readable`);
-        
-        // Try to read content
-        const content = fs.readFileSync(testFile, 'utf8');
-        console.log(`[DEBUG] Test file content: ${content}`);
-      } else {
-        console.log(`[DEBUG] Test file does not exist after write!`);
-      }
-    } catch (testFileError) {
-      console.log(`[DEBUG] Failed to create test metrics file: ${testFileError.message}`);
-    }
-  } catch (error) {
-    console.log(`[DEBUG] Error checking directory permissions: ${error.message}`);
-  }
-  
-  // Create a write stream for the log file
-  let logStream;
-  let metricsStream;
-  
-  try {
-    logStream = fs.createWriteStream(logFilePath, { flags: 'a' });
-    console.log(`[DEBUG] Log stream created: ${!!logStream}`);
-  } catch (logStreamError) {
-    console.log(`[DEBUG] Failed to create log stream: ${logStreamError.message}`);
-    // Create fallback log stream to tempdir
-    const tempLogPath = path.join(os.tmpdir(), `recording-${sessionId}-${timestamp}.log`);
-    console.log(`[DEBUG] Using fallback log path: ${tempLogPath}`);
-    logStream = fs.createWriteStream(tempLogPath, { flags: 'a' });
-  }
-  
-  try {
-    metricsStream = fs.createWriteStream(metricsFilePath, { flags: 'a' });
-    console.log(`[DEBUG] Metrics stream created: ${!!metricsStream}`);
-  } catch (metricsStreamError) {
-    console.log(`[DEBUG] Failed to create metrics stream: ${metricsStreamError.message}`);
-    // Create fallback metrics stream in backup directory
-    console.log(`[DEBUG] Using backup metrics path: ${backupMetricsFilePath}`);
-    try {
-      metricsStream = fs.createWriteStream(backupMetricsFilePath, { flags: 'a' });
-      console.log(`[DEBUG] Backup metrics stream created: ${!!metricsStream}`);
-    } catch (backupError) {
-      console.log(`[DEBUG] Failed to create backup metrics stream: ${backupError.message}`);
-      // Last resort fallback to tempdir
-      const tempMetricsPath = path.join(os.tmpdir(), `metrics-${sessionId}-${timestamp}.log`);
-      console.log(`[DEBUG] Using tempdir metrics path: ${tempMetricsPath}`);
-      metricsStream = fs.createWriteStream(tempMetricsPath, { flags: 'a' });
-    }
-  }
-  
-  // Write initial test entries to verify streams work
-  try {
-    const initialLogEntry = `[${new Date().toISOString()}] Log file created for session ${sessionId}\n`;
-    logStream.write(initialLogEntry);
-    console.log(`[DEBUG] Successfully wrote to log file: ${initialLogEntry}`);
-  } catch (logWriteError) {
-    console.log(`[DEBUG] Failed to write to log file: ${logWriteError.message}`);
-  }
-  
-  try {
-    const initialMetricsEntry = `[${new Date().toISOString()}] Metrics file created for session ${sessionId}\n`;
-    metricsStream.write(initialMetricsEntry);
-    console.log(`[DEBUG] Successfully wrote to metrics file: ${initialMetricsEntry}`);
-  } catch (metricsWriteError) {
-    console.log(`[DEBUG] Failed to write to metrics file: ${metricsWriteError.message}`);
-  }
-  
-  // Create a logger function that writes to both console and log file
+  // Logger functions
   const logger = (message) => {
     const timestampedMessage = `[${new Date().toISOString()}] ${message}`;
     console.log(timestampedMessage);
-    try {
-      logStream.write(timestampedMessage + '\n');
-    } catch (err) {
-      console.error(`[DEBUG] Failed to write to log file: ${err.message}`);
-    }
+    logStream.write(timestampedMessage + '\n');
   };
   
-  // Create a metrics logger specifically for performance data
-  // We also write metrics to the regular log for redundancy
   const metricsLogger = (message) => {
     const timestampedMessage = `[${new Date().toISOString()}] ${message}`;
     console.log(`METRICS: ${timestampedMessage}`);
-    try {
-      // Also log metrics to regular log for redundancy
-      logStream.write(`METRICS: ${timestampedMessage}\n`);
-      
-      // Try to write to metrics stream
-      metricsStream.write(timestampedMessage + '\n');
-      console.log(`[DEBUG] Successfully wrote metrics: ${message.substring(0, 50)}...`);
-    } catch (err) {
-      console.error(`[DEBUG] Failed to write to metrics file: ${err.message}`);
-    }
+    metricsStream.write(timestampedMessage + '\n');
   };
   
-  // Return the logger function and file path
-  return { 
-    log: logger,
-    logMetrics: metricsLogger,
-    logFilePath,
-    metricsFilePath
-  };
+  return { log: logger, logMetrics: metricsLogger, logFilePath, metricsFilePath };
 }
 
-// Determine optimal CPU and memory settings
-const numCPUs = os.cpus().length;
-const totalMem = Math.floor(os.totalmem() / (1024 * 1024 * 1024)); // GB
-console.log(`[DEBUG] System has ${numCPUs} CPU cores and ${totalMem}GB RAM`);
-console.log(`[DEBUG] OS Platform: ${os.platform()}, Release: ${os.release()}, Arch: ${os.arch()}`);
-console.log(`[DEBUG] Free memory: ${Math.floor(os.freemem() / (1024 * 1024))}MB`);
-
-// Use RAM disk if available for better I/O performance
-const isDev = process.env.NODE_ENV === 'development';
-const useRamDisk = true; // Always use RAM-based operations by default
-const isLinux = os.platform() === 'linux';
-
-console.log(`[DEBUG] Environment: ${isDev ? 'development' : 'production'}`);
-
-// Create a RAM disk automatically on Linux servers
-if (isLinux && !fs.existsSync('/mnt/ramdisk')) {
-  try {
-    console.log('[DEBUG] Attempting to create RAM disk on Linux server...');
-    // Create the mount point if it doesn't exist
-    if (!fs.existsSync('/mnt/ramdisk')) {
-      console.log('[DEBUG] Creating /mnt/ramdisk directory');
-      execSync('sudo mkdir -p /mnt/ramdisk', { stdio: 'inherit' });
+// Function to enhance video quality using ffmpeg with two-pass encoding
+async function enhanceVideoQuality(inputPath, outputPath, logger) {
+  return new Promise((resolve, reject) => {
+    logger(`Enhancing video quality with two-pass encoding: ${inputPath} -> ${outputPath}`);
+    
+    // Create temp directory for pass logs if needed
+    const passLogDir = path.join(tempDir, 'passes');
+    if (!fs.existsSync(passLogDir)) {
+      fs.mkdirSync(passLogDir, { recursive: true });
     }
-    // Create a 1GB RAM disk
-    console.log('[DEBUG] Mounting RAM disk');
-    execSync('sudo mount -t tmpfs -o size=1g tmpfs /mnt/ramdisk', { stdio: 'inherit' });
-    // Set permissions to allow the current user to write to it
-    execSync('sudo chmod 1777 /mnt/ramdisk', { stdio: 'inherit' });
-    console.log('[DEBUG] RAM disk created successfully at /mnt/ramdisk');
-    console.log('[DEBUG] RAM disk permissions:');
-    execSync('ls -la /mnt/ramdisk', { stdio: 'inherit' });
-  } catch (error) {
-    console.warn(`[DEBUG] Failed to create RAM disk: ${error.message}`);
-    console.warn('[DEBUG] Will use system temp directory instead');
-  }
-}
-
-// Use Azure temp SSD if available
-const azureTempSsd = '/mnt/resource/browser-recorder/temp';
-// Check if Azure temp SSD exists and create it if not
-if (isLinux && !fs.existsSync(azureTempSsd)) {
-  try {
-    console.log(`[DEBUG] Creating Azure temp SSD directory: ${azureTempSsd}`);
-    fs.mkdirSync(azureTempSsd, { recursive: true });
-    execSync(`chmod 777 ${azureTempSsd}`, { stdio: 'inherit' });
-    console.log(`[DEBUG] Created Azure temp SSD directory with proper permissions`);
-  } catch (error) {
-    console.warn(`[DEBUG] Failed to create Azure temp SSD directory: ${error.message}`);
-  }
-}
-
-// Choose optimal temp directory: Azure temp SSD > RAM disk > system temp
-// Make sure we check if we're on Azure first (which would have /mnt/resource accessible)
-// For local environments, prefer system temp directory for compatibility
-const isAzureVM = isLinux && fs.existsSync('/mnt/resource');
-const isLocalDev = process.env.NODE_ENV === 'development' || !isLinux;
-
-let tempDir;
-if (isAzureVM && fs.existsSync(azureTempSsd)) {
-  tempDir = azureTempSsd;
-  console.log('[DEBUG] Using Azure temporary SSD for recordings');
-} else if (useRamDisk && fs.existsSync('/mnt/ramdisk')) {
-  tempDir = '/mnt/ramdisk';
-  console.log('[DEBUG] Using RAM disk for recordings');
-} else {
-  tempDir = os.tmpdir();
-  console.log('[DEBUG] Using system temp directory for recordings');
-}
-
-console.log(`[DEBUG] Using temp directory: ${tempDir} (RAM-based: ${useRamDisk}, Azure SSD: ${isAzureVM && fs.existsSync(azureTempSsd)}, Local Dev: ${isLocalDev})`);
-console.log(`[DEBUG] Temp directory permissions:`);
-try {
-  execSync(`ls -la ${tempDir}`, { stdio: 'inherit' });
-} catch (error) {
-  console.warn(`[DEBUG] Could not list temp directory permissions: ${error.message}`);
-}
-
-// Ensure uploads directory exists with absolute path
-const uploadsDir = path.resolve(__dirname, 'uploads');
-console.log(`[DEBUG] Using uploads directory: ${uploadsDir}`);
-if (!fs.existsSync(uploadsDir)) {
-  console.log(`[DEBUG] Creating uploads directory: ${uploadsDir}`);
-  try {
-    fs.mkdirSync(uploadsDir, { recursive: true });
-    console.log(`[DEBUG] Successfully created uploads directory`);
-  } catch (error) {
-    console.error(`[DEBUG] Failed to create uploads directory: ${error.message}`);
-    // Continue execution - the error will be caught when trying to write files
-  }
-}
-
-console.log(`[DEBUG] Uploads directory permissions:`);
-try {
-  execSync(`ls -la ${uploadsDir}`, { stdio: 'inherit' });
-} catch (error) {
-  console.warn(`[DEBUG] Could not list uploads directory permissions: ${error.message}`);
-}
-
-// Configure video optimization based on system resources
-const VIDEO_FPS = 30; // Reduced from 60 to 30
-const TARGET_FPS = 30; // Target FPS we aim to achieve at minimum
-const ACTIVITY_DELAY = 100; // Reduced delay for even smoother activity (was 150)
-const VIDEO_WIDTH = 1280; // Reduced from 1920 to 1280
-const VIDEO_HEIGHT = 720; // Reduced from 1080 to 720
-const FFMPEG_PATH = process.env.FFMPEG_PATH || 'ffmpeg';
-
-// For hardware acceleration, be more cautious on local environments
-const isLocalEnvironment = process.env.NODE_ENV === 'development' || !isLinux;
-// Always try to use hardware acceleration when available, but be cautious with local environments
-const USE_HARDWARE_ACCELERATION = process.env.HARDWARE_ACCELERATION === 'true' || (process.env.NODE_ENV === 'development' && !isLocalEnvironment);
-const DISABLE_PAGE_ACTIVITY = false; // Enable page activity to ensure recording works
-
-// Maintain frame timing metrics
-const frameMetrics = {
-  startTime: 0,
-  frameCount: 0,
-  lastFrameTime: 0,
-  measurements: []
-};
-
-console.log(`[DEBUG] Video settings: ${VIDEO_WIDTH}x${VIDEO_HEIGHT} @ ${VIDEO_FPS}fps (target: ${TARGET_FPS}fps)`);
-console.log(`[DEBUG] Hardware acceleration: ${USE_HARDWARE_ACCELERATION ? 'Enabled' : 'Disabled'}`);
-console.log(`[DEBUG] Page activity: ${DISABLE_PAGE_ACTIVITY ? 'Disabled' : 'Enabled'}`);
-
-// Check for FFMPEG
-try {
-  console.log('[DEBUG] Checking for ffmpeg installation:');
-  execSync(`${FFMPEG_PATH} -version | head -n 1`, { stdio: 'inherit' });
-} catch (error) {
-  console.warn(`[DEBUG] ffmpeg not found or not working: ${error.message}`);
-}
-
-// Function to check if browsers are installed
-async function ensureBrowsersInstalled() {
-  console.log('[DEBUG] Checking if Playwright browsers are installed');
-  try {
-    // Try a simple browser launch to check if browsers are installed
-    console.log('[DEBUG] Attempting to launch browser to check installation');
-    const browser = await chromium.launch({ 
-      headless: true,
-      timeout: 30000
-    });
-    await browser.close();
-    console.log('[DEBUG] Browser check successful - browsers are installed');
-    return true;
-  } catch (error) {
-    console.error(`[DEBUG] Browser check error: ${error.message}`);
-    if (error.message && error.message.includes("Executable doesn't exist")) {
-      console.error('[DEBUG] Playwright browsers are not installed. Attempting to install them now...');
+    
+    const passLogPath = path.join(passLogDir, `pass-${uuidv4().substr(0, 8)}`);
+    
+    // Two-pass encoding function
+    const twoPassEncode = async () => {
+      // First pass
+      logger(`Starting first pass encoding...`);
+      const firstPassArgs = [
+        '-y',
+        '-i', inputPath,
+        '-c:v', CODEC,
+        '-b:v', VIDEO_BITRATE,
+        '-pass', '1',
+        '-passlogfile', passLogPath,
+        '-deadline', 'good',
+        '-cpu-used', '0',
+        '-threads', THREAD_COUNT.toString(),
+        '-frame-parallel', '1',
+        '-tile-columns', '2',
+        '-tile-rows', '2',
+        '-auto-alt-ref', '1',
+        '-lag-in-frames', '25',
+        '-pix_fmt', 'yuv420p',
+        '-r', `${VIDEO_FPS}`,
+        '-an',  // No audio for first pass
+        '-f', 'null',  // Output to null
+        '/dev/null'
+      ];
+      
+      if (os.platform() === 'win32') {
+        firstPassArgs[firstPassArgs.length - 1] = 'NUL';
+      }
+      
+      logger(`Running first pass with args: ${firstPassArgs.join(' ')}`);
       
       try {
-        // Try to automatically install browsers
-        console.log('[DEBUG] Running: npx playwright install chromium');
-        execSync('npx playwright install chromium', { stdio: 'inherit' });
-        console.log('[DEBUG] Chromium installed successfully');
-        return true;
-      } catch (installError) {
-        console.error(`[DEBUG] Failed to automatically install browsers: ${installError.message}`);
-        console.error('[DEBUG] Please run the following command manually:');
-        console.error('npx playwright install');
-        throw new Error('Browser installation required. Run: npx playwright install');
+        await new Promise((resolvePass, rejectPass) => {
+          const firstPassProcess = spawn(FFMPEG_PATH, firstPassArgs);
+          
+          firstPassProcess.stdout.on('data', (data) => {
+            logger(`ffmpeg first pass stdout: ${data}`);
+          });
+          
+          firstPassProcess.stderr.on('data', (data) => {
+            // This is where progress info is output
+            const dataStr = data.toString();
+            if (dataStr.includes('frame=')) {
+              // Progress info
+              const progressMatch = dataStr.match(/frame=\s*(\d+)/);
+              if (progressMatch) {
+                logger(`First pass progress: frame ${progressMatch[1]}`);
+              }
+            }
+          });
+          
+          firstPassProcess.on('close', (code) => {
+            if (code === 0) {
+              logger(`First pass completed successfully`);
+              resolvePass();
+            } else {
+              logger(`First pass exited with code ${code}`);
+              rejectPass(new Error(`First pass encoding failed with code ${code}`));
+            }
+          });
+          
+          firstPassProcess.on('error', (err) => {
+            logger(`First pass error: ${err.message}`);
+            rejectPass(err);
+          });
+        });
+        
+        // Second pass (with enhanced quality settings)
+        logger(`Starting second pass encoding...`);
+        const secondPassArgs = [
+          '-y',
+          '-i', inputPath,
+          '-c:v', CODEC,
+          '-b:v', VIDEO_BITRATE,
+          '-maxrate', `${parseInt(VIDEO_BITRATE) * 1.5}`,
+          '-minrate', VIDEO_BITRATE,
+          '-pass', '2',
+          '-passlogfile', passLogPath,
+          '-deadline', QUALITY_PRESET,
+          '-cpu-used', '0',  // Best quality
+          '-threads', THREAD_COUNT.toString(),
+          '-frame-parallel', '1',
+          '-tile-columns', '2',
+          '-tile-rows', '2',
+          '-auto-alt-ref', '1',
+          '-lag-in-frames', '25',
+          '-pix_fmt', 'yuv444p', // Better color quality
+          '-r', `${VIDEO_FPS}`,
+          '-vf', 'scale=out_color_matrix=bt709,unsharp=5:5:1.0:5:5:0.0', // Sharpen filter
+          '-color_primaries', 'bt709',
+          '-color_trc', 'bt709',
+          '-colorspace', 'bt709',
+          '-movflags', '+faststart',
+          '-c:a', 'libopus', // High quality audio codec
+          '-b:a', '192k',
+          outputPath
+        ];
+        
+        logger(`Running second pass with args: ${secondPassArgs.join(' ')}`);
+        
+        await new Promise((resolvePass, rejectPass) => {
+          const secondPassProcess = spawn(FFMPEG_PATH, secondPassArgs);
+          
+          secondPassProcess.stdout.on('data', (data) => {
+            logger(`ffmpeg second pass stdout: ${data}`);
+          });
+          
+          secondPassProcess.stderr.on('data', (data) => {
+            // This is where progress info is output
+            const dataStr = data.toString();
+            if (dataStr.includes('frame=')) {
+              // Progress info
+              const progressMatch = dataStr.match(/frame=\s*(\d+)/);
+              if (progressMatch) {
+                logger(`Second pass progress: frame ${progressMatch[1]}`);
+              }
+            }
+          });
+          
+          secondPassProcess.on('close', (code) => {
+            if (code === 0) {
+              logger(`Second pass completed successfully: ${outputPath}`);
+              resolvePass();
+            } else {
+              logger(`Second pass exited with code ${code}`);
+              rejectPass(new Error(`Second pass encoding failed with code ${code}`));
+            }
+          });
+          
+          secondPassProcess.on('error', (err) => {
+            logger(`Second pass error: ${err.message}`);
+            rejectPass(err);
+          });
+        });
+        
+        // Cleanup pass log files
+        try {
+          const logPattern = new RegExp(`^${path.basename(passLogPath)}`);
+          const passFiles = fs.readdirSync(passLogDir)
+            .filter(file => logPattern.test(file))
+            .map(file => path.join(passLogDir, file));
+          
+          passFiles.forEach(file => {
+            fs.unlinkSync(file);
+            logger(`Removed pass log file: ${file}`);
+          });
+        } catch (cleanupErr) {
+          logger(`Warning: Failed to clean up pass log files: ${cleanupErr.message}`);
+        }
+        
+        logger(`Two-pass encoding completed successfully`);
+        return outputPath;
+        
+      } catch (error) {
+        logger(`Two-pass encoding failed: ${error.message}`);
+        throw error;
       }
-    }
-    throw error;
-  }
-}
-
-// Function to look for video files in a specified directory
-function findVideoFiles(directory) {
-  if (!fs.existsSync(directory)) {
-    return [];
-  }
-  
-  try {
-    // Get all files in the directory
-    const files = fs.readdirSync(directory)
-      .filter(file => file.endsWith('.webm'))
-      .map(file => {
-        const fullPath = path.join(directory, file);
-        const stats = fs.statSync(fullPath);
-        return {
-          filename: file,
-          path: fullPath,
-          created: stats.mtime.getTime(),
-          size: stats.size
-        };
-      })
-      .sort((a, b) => b.created - a.created); // Sort by most recent first
+    };
     
-    return files;
-  } catch (error) {
-    console.error(`[DEBUG] Error finding video files in ${directory}: ${error.message}`);
-    return [];
-  }
-}
-
-// Utility function to check if a file is valid for ffmpeg processing
-function isValidForFfmpeg(file) {
-  if (!file) {
-    console.log(`[DEBUG] No file provided, skipping ffmpeg`);
-    return false;
-  }
-
-  // Explicitly check for blank files by name pattern
-  if (file.filename && file.filename.startsWith('blank-')) {
-    console.log(`[DEBUG] File '${file.filename}' is a placeholder file (starts with 'blank-'), skipping ffmpeg`);
-    return false;
-  }
-
-  // Check file size
-  if (!file.size || file.size < 10000) {
-    console.log(`[DEBUG] File size (${file?.size || 0} bytes) is too small for ffmpeg, minimum 10KB required`);
-    return false;
-  }
-
-  // Verify file path exists
-  if (!file.path || !fs.existsSync(file.path)) {
-    console.log(`[DEBUG] File path does not exist: ${file?.path || 'undefined'}`);
-    return false;
-  }
-
-  // Verify it's actually a file
-  try {
-    const stats = fs.statSync(file.path);
-    if (!stats.isFile()) {
-      console.log(`[DEBUG] Path exists but is not a file: ${file.path}`);
-      return false;
-    }
-  } catch (err) {
-    console.log(`[DEBUG] Error checking file stats: ${err.message}`);
-    return false;
-  }
-
-  // Try to read the first few bytes to verify it's a valid file
-  try {
-    // Just read the first 1024 bytes to check if file is readable
-    const fd = fs.openSync(file.path, 'r');
-    const buffer = Buffer.alloc(1024);
-    const bytesRead = fs.readSync(fd, buffer, 0, 1024, 0);
-    fs.closeSync(fd);
+          // Single-pass encoding as fallback
+    const singlePassEncode = async () => {
+      logger(`Starting single-pass encoding...`);
+      
+      return new Promise((resolvePass, rejectPass) => {
+        const ffmpegArgs = [
+          '-i', inputPath,
+          '-c:v', CODEC,
+          '-b:v', VIDEO_BITRATE,
+          '-deadline', 'good',
+          '-cpu-used', '2',  // Faster processing (0=best quality, 4=faster)
+          '-threads', THREAD_COUNT.toString(),
+          '-auto-alt-ref', '1',
+          '-lag-in-frames', '16', // Reduced from 25 for speed
+          '-frame-parallel', '1',
+          '-tile-columns', '4', // More tiles for parallel processing
+          '-pix_fmt', 'yuv420p', // Standard pixel format (faster)
+          '-r', `${VIDEO_FPS}`,
+          '-vf', 'scale=out_color_matrix=bt709',
+          '-movflags', '+faststart',
+          '-y',
+          outputPath
+        ];
+        
+        logger(`Running single-pass with args: ${ffmpegArgs.join(' ')}`);
+        
+        const ffmpegProcess = spawn(FFMPEG_PATH, ffmpegArgs);
+        
+        ffmpegProcess.stdout.on('data', (data) => {
+          logger(`ffmpeg stdout: ${data}`);
+        });
+        
+        ffmpegProcess.stderr.on('data', (data) => {
+          logger(`ffmpeg stderr: ${data}`);
+        });
+        
+        ffmpegProcess.on('close', (code) => {
+          if (code === 0) {
+            logger(`Single-pass encoding completed successfully: ${outputPath}`);
+            resolvePass(outputPath);
+          } else {
+            logger(`ffmpeg exited with code ${code}`);
+            // Fall back to original if enhancement fails
+            fs.copyFileSync(inputPath, outputPath);
+            logger(`Falling back to original video due to ffmpeg error`);
+            resolvePass(outputPath);
+          }
+        });
+        
+        ffmpegProcess.on('error', (err) => {
+          logger(`ffmpeg error: ${err.message}`);
+          rejectPass(err);
+        });
+      });
+    };
     
-    if (bytesRead < 10) {
-      console.log(`[DEBUG] File contains insufficient data (only ${bytesRead} bytes read)`);
-      return false;
-    }
-  } catch (err) {
-    console.log(`[DEBUG] Error reading file: ${err.message}`);
-    return false;
-  }
-
-  console.log(`[DEBUG] File '${file.filename}' (${file.size} bytes) is valid for ffmpeg processing`);
-  return true;
+    // Execute encoding with preferences
+    (async () => {
+      try {
+        if (TWO_PASS_ENCODING) {
+          try {
+            await twoPassEncode();
+            logger(`Two-pass encoding successful`);
+            resolve(outputPath);
+          } catch (twoPassErr) {
+            logger(`Two-pass encoding failed, falling back to single-pass: ${twoPassErr.message}`);
+            await singlePassEncode();
+            resolve(outputPath);
+          }
+        } else {
+          await singlePassEncode();
+          resolve(outputPath);
+        }
+      } catch (err) {
+        logger(`All encoding attempts failed: ${err.message}`);
+        reject(err);
+      }
+    })();
+  });
 }
 
-async function recordWebsite(url, duration = 10) {
-  // Generate a session ID for this recording
+// Record a website with balanced quality
+async function recordWebsite(url, duration = 10, options = {}) {
   const sessionId = uuidv4().substr(0, 8);
-  
-  // Create a logger for this session
   const { log, logMetrics, logFilePath, metricsFilePath } = createSessionLogger(sessionId);
+  const sessionStartTime = Date.now();
   
-  log(`Starting recording session ${sessionId} for ${url} with duration ${duration}s`);
-  logMetrics(`SESSION_START,ID=${sessionId},URL=${url},DURATION=${duration}s`);
-  log(`System info: ${numCPUs} CPU cores, ${totalMem}GB RAM, Platform: ${os.platform()}, Release: ${os.release()}`);
-  logMetrics(`SYSTEM,CORES=${numCPUs},RAM=${totalMem}GB,PLATFORM=${os.platform()},RELEASE=${os.release()}`);
-  log(`Free memory: ${Math.floor(os.freemem() / (1024 * 1024))}MB`);
-  logMetrics(`MEMORY,FREE=${Math.floor(os.freemem() / (1024 * 1024))}MB`);
-  log(`Video settings: ${VIDEO_WIDTH}x${VIDEO_HEIGHT} @ ${VIDEO_FPS}fps (target: ${TARGET_FPS}fps)`);
-  logMetrics(`VIDEO_SETTINGS,WIDTH=${VIDEO_WIDTH},HEIGHT=${VIDEO_HEIGHT},FPS=${VIDEO_FPS},TARGET_FPS=${TARGET_FPS}`);
+  // Allow overriding default settings through options
+  const videoWidth = options.width || VIDEO_WIDTH;
+  const videoHeight = options.height || VIDEO_HEIGHT;
+  const videoFps = options.fps || VIDEO_FPS;
+  const fastMode = options.fastMode !== undefined ? options.fastMode : true; // Default to fast mode
+  const quality = options.quality || 'balanced'; // 'low', 'balanced', 'high'
+  
+  // Adjust quality settings based on selected quality profile
+  let cpuUsed, pixFmt, encodeQuality;
+  switch (quality) {
+    case 'low':
+      cpuUsed = 4;
+      pixFmt = 'yuv420p';
+      encodeQuality = 'realtime';
+      break;
+    case 'high':
+      cpuUsed = 1;
+      pixFmt = 'yuv420p';
+      encodeQuality = 'good';
+      break;
+    case 'balanced':
+    default:
+      cpuUsed = 2;
+      pixFmt = 'yuv420p';
+      encodeQuality = 'good';
+  }
+  
+  // Log system info with GPU details
+  const numCPUs = os.cpus().length;
+  const totalMem = Math.floor(os.totalmem() / (1024 * 1024 * 1024));
+  
+  log(`Starting balanced recording session ${sessionId} for ${url} with duration ${duration}s`);
+  log(`System: ${numCPUs} CPU cores, ${totalMem}GB RAM, ${os.platform()}`);
+  log(`Video settings: ${videoWidth}x${videoHeight} @ ${videoFps}fps, ${VIDEO_BITRATE} bitrate`);
+  log(`Quality profile: ${quality}, Fast mode: ${fastMode ? 'ON' : 'OFF'}`);
   log(`Hardware acceleration: ${USE_HARDWARE_ACCELERATION ? 'Enabled' : 'Disabled'}`);
-  logMetrics(`HARDWARE_ACCELERATION=${USE_HARDWARE_ACCELERATION ? 'Enabled' : 'Disabled'}`);
+  log(`Temp directory: ${tempDir}`);
+  log(`Session started at: ${new Date(sessionStartTime).toISOString()}`);
   
-  // Double-check that metrics directory exists
-  if (!fs.existsSync(metricsDir)) {
-    log(`Metrics directory does not exist, creating it now...`);
-    try {
-      fs.mkdirSync(metricsDir, { recursive: true });
-      log(`Metrics directory created at ${metricsDir}`);
-      execSync(`chmod -R 777 ${metricsDir}`, { stdio: 'inherit' });
-      log(`Set full permissions on metrics directory`);
-    } catch (mkdirError) {
-      log(`Failed to create metrics directory: ${mkdirError.message}`);
-    }
-  }
-  
-  // Verify metrics file path
-  log(`Metrics will be saved to: ${metricsFilePath}`);
-  logMetrics(`METRICS_FILE_CHECK=Path is ${metricsFilePath}`);
-  
-  // Double-check that uploads directory exists
-  if (!fs.existsSync(uploadsDir)) {
-    log(`Uploads directory does not exist, creating it now...`);
-    try {
-      fs.mkdirSync(uploadsDir, { recursive: true });
-      log(`Upload directory created`);
-    } catch (mkdirError) {
-      log(`Failed to create uploads directory: ${mkdirError.message}`);
-      throw new Error(`Cannot create uploads directory: ${mkdirError.message}`);
-    }
-  }
-  
-  log('Checking directory permissions:');
-  try {
-    execSync(`ls -la ${__dirname}`, { stdio: 'inherit' });
-  } catch (error) {
-    log(`Could not list directory permissions: ${error.message}`);
-  }
-  
-  // Ensure browsers are installed before proceeding
-  try {
-    await ensureBrowsersInstalled();
-    log('Browser installation check completed successfully');
-  } catch (browserInstallError) {
-    log(`Failed to ensure browsers are installed: ${browserInstallError.message}`);
-    throw browserInstallError;
-  }
-  
-  // Generate a proper filename for this recording
+  // Generate filenames
   const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-  const recordingId = sessionId;
-  const videoFilename = `recording-${recordingId}-${timestamp}.webm`;
-  const videoPath = path.join(uploadsDir, videoFilename);
-  log(`Generated recording filename: ${videoFilename}`);
+  const rawVideoFilename = `raw-recording-${sessionId}-${timestamp}.webm`;
+  const rawVideoPath = path.join(tempDir, rawVideoFilename);
+  const finalVideoFilename = `recording-${sessionId}-${timestamp}.webm`;
+  const finalVideoPath = path.join(uploadsDir, finalVideoFilename);
   
-  // Create a fallback screenshot in case video recording fails
-  const screenshotFilename = `screenshot-${recordingId}-${timestamp}.png`;
-  const screenshotPath = path.join(uploadsDir, screenshotFilename);
-  
-  // Launch browser with appropriate configuration
+  // Launch browser
   let browser;
+  let context;
+  let page;
+  let recordedVideoPath;
+  
   try {
-    // Base browser arguments for all environments
+    // Enhanced browser arguments for better rendering on high-end system
     const browserArgs = [
       '--no-sandbox',
       '--disable-setuid-sandbox',
       '--disable-dev-shm-usage',
-      '--no-first-run',
-      '--no-zygote',
       '--disable-web-security',
       '--autoplay-policy=no-user-gesture-required',
       '--disable-extensions',
-      '--disable-background-networking',
-      '--disable-background-timer-throttling',
-      '--disable-backgrounding-occluded-windows',
-      '--disable-breakpad',
-      '--disable-component-extensions-with-background-pages',
-      '--disable-ipc-flooding-protection',
-      '--disable-renderer-backgrounding',
       '--mute-audio',
-      '--disable-sync',
+      
+      // Hardware acceleration optimizations - fully enabled
+      '--enable-gpu-rasterization',
+      '--enable-accelerated-video-decode',
+      '--enable-accelerated-2d-canvas',
+      '--enable-accelerated-video',
+      '--ignore-gpu-blocklist',
+      '--force-gpu-rasterization',
+      '--enable-oop-rasterization',
+      '--enable-zero-copy',
+      '--use-angle=gl',
+      
+      // Frame rate and rendering optimizations
+      '--disable-frame-rate-limit',
+      '--disable-gpu-vsync',
+      
+      // Memory optimizations for 16GB system
+      `--js-flags=--max-old-space-size=${Math.floor(AVAILABLE_MEMORY * 1024 * 0.25)}`, // 25% of available RAM
       '--memory-pressure-off',
-      '--disable-hang-monitor',
-      // Performance improvements
-      '--disable-features=site-per-process',
-      '--disable-features=TranslateUI,BlinkGenPropertyTrees',
-      '--disable-threaded-animation',
-      '--disable-threaded-scrolling',
-      '--disable-checker-imaging',
-      '--blink-settings=primaryHoverType=2,availableHoverTypes=2,primaryPointerType=4,availablePointerTypes=4',
-      // Memory optimization
-      '--single-process', // More performant for recording only
-      '--renderer-process-limit=1',
-      '--disable-default-apps',
-      // Additional optimizations 
-      '--disable-software-rasterizer',
-      '--disable-features=BlinkGenPropertyTrees'
+      '--disable-renderer-backgrounding',
+      
+      // Better compositing
+      '--enable-features=VaapiVideoDecoder,CanvasOopRasterization,VizDisplayCompositor',
+      
+      // Thread optimizations for 8-core system
+      '--renderer-process-limit=8',
+      '--num-raster-threads=8',
+      '--enable-thread-composting'
     ];
     
-    // Add hardware acceleration flags if available and in development mode
-    if (USE_HARDWARE_ACCELERATION) {
-      log('Using hardware acceleration for video recording');
-      browserArgs.push(
-        '--enable-gpu-rasterization',
-        '--enable-accelerated-video-decode',
-        '--enable-accelerated-2d-canvas',
-        '--enable-accelerated-video',
-        '--enable-native-gpu-memory-buffers',
-        '--enable-gpu-compositing',
-        '--enable-oop-rasterization',
-        '--ignore-gpu-blocklist'
-      );
-      
-      // Only use EGL on Linux/Azure VM environments, as it might not be available on macOS or Windows
-      if (isLinux && !isLocalEnvironment) {
-        log('Using EGL for hardware acceleration (Linux server environment)');
-        browserArgs.push('--use-gl=egl');
-      } else {
-        log('Using default OpenGL backend for hardware acceleration (local environment)');
-      }
-    } else {
-      log('Using software rendering for video recording');
-      browserArgs.push('--disable-gpu');
-      browserArgs.push('--disable-accelerated-2d-canvas');
-      browserArgs.push('--use-gl=swiftshader');
+    // Platform-specific optimizations
+    if (os.platform() === 'linux') {
+      browserArgs.push('--use-gl=egl');
     }
     
-    // Check available browsers
-    console.log('[DEBUG] Available browsers:');
-    try {
-      execSync('npx playwright --version', { stdio: 'inherit' });
-    } catch (error) {
-      console.warn(`[DEBUG] Could not get Playwright version: ${error.message}`);
-    }
-    
-    log(`Launching browser with ${browserArgs.length} arguments`);
-    log(`Browser args: ${browserArgs.join(' ')}`);
-    
-    const launchOptions = {
+    // Launch browser with longer timeout and better gpu usage
+    log('Launching browser with enhanced graphics settings...');
+    browser = await chromium.launch({
       headless: true,
-      executablePath: process.env.CHROME_PATH,
-      chromiumSandbox: false,
+      args: browserArgs,
       timeout: 60000,
-      args: browserArgs
-    };
+      chromiumSandbox: false,
+      handleSIGINT: true,
+      handleSIGTERM: true,
+      handleSIGHUP: true
+    });
+    log('Browser launched successfully with enhanced graphics settings');
     
-    log(`Browser launch options: ${JSON.stringify(launchOptions, null, 2)}`);
-    browser = await chromium.launch(launchOptions);
-    log('Browser launched successfully');
-  } catch (error) {
-    log(`Failed to launch browser: ${error.message}`);
-    log(`Error stack: ${error.stack}`);
-    if (error.message.includes("Executable doesn't exist")) {
-      throw new Error(
-        "Playwright browser not found. Please run 'npx playwright install' to download the required browsers."
-      );
+    // Create browser context with high quality video recording
+    log('Creating browser context with high quality video recording...');
+    
+    // First, ensure temp directory exists with proper permissions
+    if (!fs.existsSync(tempDir)) {
+      log(`Creating temp directory: ${tempDir}`);
+      fs.mkdirSync(tempDir, { recursive: true });
     }
-    throw error;
-  }
-
-  try {
-    log('Creating browser context with video recording enabled');
-    // Create a browser context with video recording enabled with improved settings
-    const contextOptions = {
+    
+    // Set explicit video filename to avoid path detection issues
+    const recordingFileName = `recording-${sessionId}-${Date.now()}.webm`;
+    const recordingPath = path.join(tempDir, recordingFileName);
+    log(`Setting explicit recording path: ${recordingPath}`);
+    
+    context = await browser.newContext({
       viewport: { width: VIDEO_WIDTH, height: VIDEO_HEIGHT },
+      deviceScaleFactor: 2, // Better rendering on high-DPI displays
+      colorScheme: 'light', // More consistent rendering
       recordVideo: {
-        dir: useRamDisk ? tempDir : uploadsDir,
+        dir: tempDir,
         size: { width: VIDEO_WIDTH, height: VIDEO_HEIGHT },
-        fps: VIDEO_FPS
+        fps: VIDEO_FPS,
+        path: recordingPath // Explicitly set the recording path
       },
       ignoreHTTPSErrors: true,
-      bypassCSP: true,
-      deviceScaleFactor: 1.0, // Reduced to avoid rendering issues
-      hasTouch: false,
-      isMobile: false,
       javaScriptEnabled: true,
-      userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/96.0.4664.110 Safari/537.36',
+      bypassCSP: true, // Allow loading of all resources
       extraHTTPHeaders: {
         'Accept-Language': 'en-US,en;q=0.9'
       }
-    };
+    });
     
-    log(`Browser context options: ${JSON.stringify(contextOptions, null, 2)}`);
-    const context = await browser.newContext(contextOptions);
-    log('Browser context created successfully');
-
-    // Force garbage collection to free memory before recording
-    try {
-      if (global.gc) {
-        global.gc();
-        log('Forced garbage collection before recording');
-      } else {
-        log('Garbage collection not available (Node.js needs --expose-gc flag)');
-      }
-    } catch (e) {
-      log(`Could not force garbage collection: ${e.message}`);
-    }
-
-    // Optimize context performance
-    context.setDefaultNavigationTimeout(30000);
-    context.setDefaultTimeout(20000);
+    // Store known recording path for later use if Playwright fails to return it
+    page = await context.newPage();
+    recordedVideoPath = recordingPath; // Pre-set the path we know it should use
+    log('Browser context created with high quality settings');
     
-    // Create a new page
-    log('Creating new page');
-    const page = await context.newPage();
-    log('Page created successfully');
+    // Page was already created when setting up the context
+    log('Page already created, configuring with optimized settings...');
     
-    // Flag to track if we have any successful content
-    let hasContent = false;
-
-    // Take a screenshot as a fallback for when video doesn't work
-    let screenshotTaken = false;
-    try {
-      await page.screenshot({ path: screenshotPath });
-      screenshotTaken = true;
-      log(`Fallback screenshot saved to ${screenshotPath}`);
-    } catch (screenshotError) {
-      log(`Failed to take fallback screenshot: ${screenshotError.message}`);
-    }
+    // Set extra headers for better content loading
+    await page.setExtraHTTPHeaders({
+      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+      'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8',
+      'Accept-Language': 'en-US,en;q=0.9',
+      'Accept-Encoding': 'gzip, deflate, br'
+    });
     
-    log(`Loading page: ${url}`);
-    try {
-      // Navigate to the URL with optimized wait conditions
-      log('Navigating to URL with networkidle wait condition');
-      const navigationResponse = await page.goto(url, { 
-        waitUntil: 'networkidle', // Wait for network to be idle for better content loading
-        timeout: 60000 // Increased timeout for more complete loading
-      });
+    // Enable better JS performance
+    await page.addInitScript(() => {
+      window.devicePixelRatio = 2; // Force high DPI rendering
+    });
+    
+    log('Page created with optimized settings');
+    
+    // Navigate to URL with better settings
+    log(`Loading page with high quality settings: ${url}`);
+    await page.goto(url, { 
+      waitUntil: 'networkidle',
+      timeout: 60000
+    });
+    
+    log(`Page loaded. Title: ${await page.title()}`);
+    
+    // Let the page stabilize for smoother video start
+    await new Promise(resolve => setTimeout(resolve, 1000));
+    
+    // Scroll the page to ensure all content is rendered
+    await page.evaluate(async () => {
+      const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+      const height = document.body.scrollHeight;
       
-      log(`Navigation status: ${navigationResponse ? navigationResponse.status() : 'No response'}`);
-      log(`Navigation URL: ${navigationResponse ? navigationResponse.url() : 'No response'}`);
-      
-      // Allow page to fully render
-      log('Waiting 1 second for page to render');
-      await page.waitForTimeout(1000);
-      
-      // Check page content
-      log(`Page title: ${await page.title()}`);
-      if (await page.title()) {
-        hasContent = true;
+      // Smooth scroll down and back up for better content loading
+      for (let i = 0; i < height; i += 100) {
+        window.scrollTo(0, i);
+        await delay(50);
       }
       
-      // Take a screenshot for debugging
+      // Scroll back to top
+      window.scrollTo(0, 0);
+    });
+    
+    log('Page content fully rendered for better video quality');
+    
+    // Wait for recording duration
+    log(`Recording high quality video for ${duration} seconds...`);
+    await new Promise(resolve => setTimeout(resolve, duration * 1000));
+    log('Recording duration completed');
+    
+    // Close page to finish recording
+    log('Closing page to end recording...');
+    if (page && !page.isClosed()) {
+      await page.close();
+      log('Page closed');
+    }
+    
+    // Close context to ensure video is saved
+    log('Closing context to finish video recording...');
+    if (context) {
       try {
-        const screenshotPath = path.join(uploadsDir, `debug-screenshot-${Date.now()}.png`);
-        await page.screenshot({ path: screenshotPath });
-        log(`Saved debug screenshot to ${screenshotPath}`);
-      } catch (screenshotError) {
-        log(`Failed to take screenshot: ${screenshotError.message}`);
-      }
-      
-      // Generate activity for longer duration to ensure recording works
-      let frameStats = null;
-      if (!DISABLE_PAGE_ACTIVITY) {
-        log(`Generating initial page activity...`);
+        // Wait before closing to ensure video data is flushed
+        await new Promise(resolve => setTimeout(resolve, 1000));
         
-        // Double-check logMetrics function is available
-        if (!logMetrics) {
-          log(`WARNING: logMetrics function not available, creating fallback`);
-          // Create a fallback metrics logger that only logs to console
-          logMetrics = (message) => {
-            console.log(`METRICS FALLBACK: ${message}`);
-          };
+        // Close context - in newer Playwright versions, this might not return the video path
+        const contextVideoPath = await context.close();
+        
+        if (contextVideoPath && fs.existsSync(contextVideoPath)) {
+          // If Playwright returns a valid path, use it
+          recordedVideoPath = contextVideoPath;
+          log(`Context closed, returned valid video path: ${recordedVideoPath}`);
+        } else if (recordedVideoPath && fs.existsSync(recordedVideoPath)) {
+          // Otherwise use our pre-set path if it exists
+          log(`Using pre-set recording path: ${recordedVideoPath}`);
         } else {
-          // Test the metrics logging
-          logMetrics(`PRE_ACTIVITY_TEST,TIME=${Date.now()}`);
-          log(`Metrics logging test performed`);
+          log(`No valid video path from context.close() or pre-set path`);
         }
-        
-        // Generate activity for longer duration to ensure recording works
-        log(`Frame rate statistics: ${frameStats.fps} FPS, Avg frame time: ${frameStats.avgFrameTime.toFixed(2)}ms`);
-        
-        // Log to both normal log and metrics log
-        const metricsMessage = `RECORDING_STATS,FPS=${frameStats.fps},AVG_FRAME_TIME=${frameStats.avgFrameTime.toFixed(2)}ms,MIN=${frameStats.minFrameTime}ms,MAX=${frameStats.maxFrameTime}ms`;
-        log(metricsMessage); // Log to regular log file
-        logMetrics(metricsMessage); // Log to metrics file
-        
-        log(`Frame time range: Min=${frameStats.minFrameTime}ms, Max=${frameStats.maxFrameTime}ms`);
-        
-        // Flush metrics to ensure they're written
-        try {
-          fs.readdir(metricsDir, (err, files) => {
-            if (err) {
-              log(`Error reading metrics directory: ${err.message}`);
-            } else {
-              log(`Metrics directory contains ${files.length} files after recording`);
-            }
-          });
-        } catch (err) {
-          log(`Error checking metrics directory: ${err.message}`);
-        }
-        
-        hasContent = true;
-        
-        // Wait for the remainder of the recording time
-        const remainingTime = (duration * 1000) - 5000;
-        if (remainingTime > 0) {
-          log(`Waiting for the remaining recording time (${remainingTime}ms)...`);
-          await page.waitForTimeout(remainingTime);
-        }
-      } else {
-        log(`Page activity disabled, recording page as-is...`);
-        // Wait for the full recording time
-        await page.waitForTimeout(duration * 1000);
+      } catch (contextError) {
+        log(`Error closing context: ${contextError.message}`);
       }
       
-    } catch (navigationError) {
-      log(`Navigation issue: ${navigationError.message}`);
-      log(`Navigation error stack: ${navigationError.stack}`);
-      // Continue with recording anyway - we'll record whatever is on the page
+      // Wait additional time for filesystem operations to complete
+      await new Promise(resolve => setTimeout(resolve, 1000));
     }
     
-    // Ensure recording had enough activity to be valid
-    log(`Recording completed after ${duration} seconds`);
-    
-    // End the recording by closing the page and context
-    log('Closing page to end recording');
-    await page.close();
-    log(`Page closed, waiting for video to be saved...`);
-    const recordedVideoPath = await context.close();
-    log(`Context closed, video path: ${recordedVideoPath || 'undefined'}`);
-    
-    // Look for the most recently created video file
-    let foundVideoFile;
-    
-    // Check if video recording was successful
-    let videoRecordingSuccessful = recordedVideoPath && fs.existsSync(recordedVideoPath) && 
-                                   fs.statSync(recordedVideoPath).size > 10000;
-    
-    if (videoRecordingSuccessful) {
-      log(`Video recording successful! Path: ${recordedVideoPath}, Size: ${fs.statSync(recordedVideoPath).size} bytes`);
-    } else {
-      log(`Video recording failed or produced invalid file: ${recordedVideoPath || 'undefined'}`);
-      if (recordedVideoPath && fs.existsSync(recordedVideoPath)) {
-        log(`Video file exists but size is only ${fs.statSync(recordedVideoPath).size} bytes`);
-      }
-    }
-    
-    // Debug what's in the temp directory
-    log(`Contents of temp directory (${tempDir}):`);
-    try {
-      execSync(`ls -la ${tempDir}`, { stdio: 'inherit' });
-    } catch (error) {
-      log(`Could not list temp directory contents: ${error.message}`);
-    }
-    
-    // Find any video files in temp directory if the recording path is undefined
-    let videoFilesInTemp = [];
-    if (!videoRecordingSuccessful) {
-      log(`Looking for any video files in temp directory: ${tempDir}`);
-      videoFilesInTemp = findVideoFiles(tempDir);
-      log(`Found ${videoFilesInTemp.length} video files in temp directory`);
-      
-      // If we found video files in temp directory, try to use the most recent one
-      if (videoFilesInTemp.length > 0) {
-        const recentTempVideo = videoFilesInTemp[0];
-        log(`Found recent video in temp dir: ${recentTempVideo.filename} (${recentTempVideo.size} bytes)`);
-        
-        if (recentTempVideo.size > 10000) {
-          videoRecordingSuccessful = true;
-          recordedVideoPath = recentTempVideo.path;
-          log(`Using video from temp directory: ${recordedVideoPath}`);
-        }
-      }
-    }
-    
-    // If using RAM disk and video recording was successful, copy the file to uploads directory
-    if (useRamDisk && videoRecordingSuccessful) {
-      const destFile = path.join(uploadsDir, path.basename(recordedVideoPath));
-      log(`Copying video from temp directory: ${recordedVideoPath} to ${destFile}`);
-      try {
-        // Use system commands for copying to handle permission issues
-        execSync(`sudo cp "${recordedVideoPath}" "${destFile}"`, { stdio: 'inherit' });
-        log(`File copy succeeded using system command`);
-        
-        // Set proper ownership for the copied file
-        try {
-          execSync(`sudo chmod 644 "${destFile}"`, { stdio: 'inherit' });
-          log(`Set permissions for destination file`);
-        } catch (chmodError) {
-          log(`Failed to set permissions: ${chmodError.message}`);
-        }
-        
-        try {
-          // Use system command to remove the temp file
-          execSync(`sudo rm "${recordedVideoPath}"`, { stdio: 'inherit' });
-          log(`Removed temp file: ${recordedVideoPath}`);
-        } catch (unlinkError) {
-          log(`Failed to remove temp file: ${unlinkError.message}`);
-        }
-        
-        // Check if the file exists and get its size
-        if (fs.existsSync(destFile)) {
-          const fileSize = fs.statSync(destFile).size;
-          log(`Destination file size: ${fileSize} bytes`);
-          
-          foundVideoFile = {
-            filename: path.basename(destFile),
-            path: destFile,
-            size: fileSize
-          };
-          log(`Video copied successfully, size: ${foundVideoFile.size} bytes`);
-        } else {
-          log(`Destination file does not exist after copy: ${destFile}`);
-          videoRecordingSuccessful = false;
-        }
-      } catch (copyError) {
-        log(`File copy failed: ${copyError.message}`);
-        log(`Copy error stack: ${copyError.stack}`);
-        videoRecordingSuccessful = false;
-      }
-    } else if (!useRamDisk && videoRecordingSuccessful) {
-      // If not using RAM disk but video recording was successful
-      foundVideoFile = {
-        filename: path.basename(recordedVideoPath),
-        path: recordedVideoPath,
-        size: fs.statSync(recordedVideoPath).size
-      };
-      log(`Using direct video file: ${foundVideoFile.filename}, size: ${foundVideoFile.size} bytes`);
-    } else {
-      // Try to find any valid recording in the uploads directory
-      log(`Looking for recording in uploads directory: ${uploadsDir}`);
-      foundVideoFile = findVideoFiles(uploadsDir)[0] || null;
-    }
-    
-    log(`Video file found: ${foundVideoFile ? 'yes' : 'no'}`);
-    
-    // Handle the case where no video was found
-    if (!foundVideoFile || foundVideoFile.size < 10000) {
-      log(`No valid video was produced by Playwright or file is too small`);
-      
-      // Return the screenshot if it was taken successfully
-      if (screenshotTaken && fs.existsSync(screenshotPath)) {
-        log(`Returning screenshot instead of video: ${screenshotFilename}`);
-        return { 
-          fileName: screenshotFilename,
-          logFile: path.basename(logFilePath),
-          metricsFile: path.basename(metricsFilePath)
-        };
-      }
-      
-      // Create a video placeholder with the proper naming scheme
-      log(`Creating placeholder video file: ${videoFilename}`);
-      try {
-        fs.writeFileSync(videoPath, "NO_VIDEO_RECORDED");
-        log(`Created placeholder file at ${videoPath}`);
-        
-        // Return proper video filename for better UX
-        return { 
-          fileName: videoFilename,
-          logFile: path.basename(logFilePath),
-          metricsFile: path.basename(metricsFilePath)
-        };
-      } catch (writeError) {
-        log(`Failed to write placeholder file: ${writeError.message}`);
-        
-        // Last resort fallback: generate a blank file with proper naming
-        const fallbackFilename = `video-fallback-${recordingId}.webm`;
-        const fallbackPath = path.join(uploadsDir, fallbackFilename);
-        try {
-          fs.writeFileSync(fallbackPath, "VIDEO_RECORDING_FAILED");
-          log(`Created fallback placeholder: ${fallbackFilename}`);
-          return { 
-            fileName: videoFilename,
-            logFile: path.basename(logFilePath),
-            metricsFile: path.basename(metricsFilePath)
-          };
-        } catch (fallbackError) {
-          log(`All recording methods failed: ${fallbackError.message}`);
-          // Just return the name, we've tried our best
-          return { 
-            fileName: videoFilename,
-            logFile: path.basename(logFilePath),
-            metricsFile: path.basename(metricsFilePath)
-          };
-        }
-      }
-    }
-    
-    log(`Using video file: ${foundVideoFile.filename} (${foundVideoFile.size} bytes)`);
-    
-    // After finding video file, try to improve its quality with ffmpeg if available
-    if (foundVideoFile) {
-      // Skip ffmpeg for invalid files - central check in one place with detailed logging
-      if (!isValidForFfmpeg(foundVideoFile)) {
-        log(`Skipping ffmpeg enhancement for invalid file: ${foundVideoFile.filename}`);
-        
-        // If we have a screenshot, prefer that over a tiny video file
-        if (screenshotTaken && fs.existsSync(screenshotPath) && foundVideoFile.size < 50000) {
-          log(`Returning screenshot (${screenshotFilename}) instead of small video file (${foundVideoFile.size} bytes)`);
-          return { 
-            fileName: screenshotFilename,
-            logFile: path.basename(logFilePath),
-            metricsFile: path.basename(metricsFilePath)
-          };
-        }
-        
-        return { 
-          fileName: foundVideoFile.filename,
-          logFile: path.basename(logFilePath),
-          metricsFile: path.basename(metricsFilePath)
-        };
-      }
+    // If no valid path, search in temp directory
+    if (!recordedVideoPath || !fs.existsSync(recordedVideoPath)) {
+      log('No valid video path returned, searching temp directory for recordings...');
       
       try {
-        // At this point, we know the file is valid for ffmpeg processing
-        const originalPath = foundVideoFile.path;
-        const enhancedPath = path.join(uploadsDir, `enhanced-${foundVideoFile.filename}`);
+        if (!fs.existsSync(tempDir)) {
+          log(`Temp directory doesn't exist: ${tempDir}`);
+          return { error: "Temp directory not found", logFile: path.basename(logFilePath) };
+        }
         
-        try {
-          // Check if ffmpeg is available
-          log('Checking if ffmpeg is available');
-          execSync(`${FFMPEG_PATH} -version`, { stdio: 'ignore' });
-          
-          // Choose optimal encoding settings based on hardware capabilities and measured performance
-          let ffmpegCmd;
-          
-          // If we got good frame rates, use higher quality settings
-          const achievedGoodFps = frameStats && frameStats.fps >= TARGET_FPS;
-          
-          // Add hardware acceleration parameters if available
-          const useHardwareAcceleration = USE_HARDWARE_ACCELERATION || isDev;
-          const hwAccelParams = useHardwareAcceleration ? '-hwaccel auto -hwaccel_device 0 ' : '';
-          
-          // Optimize ffmpeg parameters based on the frame rate we achieved
-          if (isDev && isLocalEnvironment) {
-            // Local development - use simpler parameters that work on most systems
-            ffmpegCmd = `${FFMPEG_PATH} -y ${hwAccelParams}-i "${originalPath}" -c:v libvpx-vp9 -b:v 2M -crf 30 -deadline good -cpu-used 4 -threads 2 "${enhancedPath}"`;
-            log(`Using conservative FFmpeg settings for local environment: ${ffmpegCmd}`);
-          } else if (isDev) {
-            // Fast mode for cloud development - speed over quality, but still decent
-            ffmpegCmd = `${FFMPEG_PATH} -y ${hwAccelParams}-i "${originalPath}" -c:v libvpx-vp9 -b:v 2M ${achievedGoodFps ? '-deadline realtime' : '-deadline realtime'} -cpu-used ${achievedGoodFps ? '8' : '8'} -pix_fmt yuv420p -quality ${achievedGoodFps ? 'realtime' : 'realtime'} -crf ${achievedGoodFps ? '36' : '36'} -speed ${achievedGoodFps ? '8' : '8'} -tile-columns 6 -frame-parallel 1 -threads 6 "${enhancedPath}"`;
-          } else {
-            // Balanced mode for production - good quality with reasonable speed
-            ffmpegCmd = `${FFMPEG_PATH} -y ${hwAccelParams}-i "${originalPath}" -c:v libvpx-vp9 -b:v 2M -deadline ${achievedGoodFps ? 'realtime' : 'realtime'} -cpu-used ${achievedGoodFps ? '8' : '8'} -pix_fmt yuv420p -quality realtime -crf ${achievedGoodFps ? '36' : '36'} -speed ${achievedGoodFps ? '8' : '8'} -tile-columns 4 -frame-parallel 1 -threads 6 "${enhancedPath}"`;
-          }
-          
-          // Add frame rate info to the log
-          log(`Enhancing video with ffmpeg (quality: ${achievedGoodFps ? 'optimized for speed' : 'optimized for quality'}, hardware acceleration: ${useHardwareAcceleration ? 'enabled' : 'disabled'}): ${enhancedPath}`);
-          log(`Measured performance: ${frameStats ? frameStats.fps + ' FPS' : 'No measurements available'}`);
-          log(`ffmpeg command: ${ffmpegCmd}`);
-          
-          // Enhance video with ffmpeg for smoother playback
-          try {
-            execSync(ffmpegCmd, { 
-              stdio: 'inherit',
-              timeout: 120000 // 120 second timeout for higher quality processing
-            });
-            
-            // If enhancement succeeded, use the enhanced file
-            if (fs.existsSync(enhancedPath) && fs.statSync(enhancedPath).size > 0) {
-              log(`Enhanced file exists: ${enhancedPath}, size: ${fs.statSync(enhancedPath).size} bytes`);
-              log(`Using enhanced video: ${enhancedPath}`);
-              return { 
-                fileName: path.basename(enhancedPath),
-                logFile: path.basename(logFilePath),
-                metricsFile: path.basename(metricsFilePath)
-              };
-            } else {
-              log(`Enhanced video creation failed or resulted in empty file. Using original video.`);
-              return { 
-                fileName: foundVideoFile.filename,
-                logFile: path.basename(logFilePath),
-                metricsFile: path.basename(metricsFilePath)
-              };
-            }
-          } catch (ffmpegCmdError) {
-            log(`FFmpeg command execution failed: ${ffmpegCmdError.message}`);
-            log(`Returning original unenhanced video file`);
-            return { 
-              fileName: foundVideoFile.filename,
-              logFile: path.basename(logFilePath),
-              metricsFile: path.basename(metricsFilePath)
+        // List all files in temp directory
+        const files = fs.readdirSync(tempDir);
+        log(`Found ${files.length} files in temp directory`);
+        
+        // Filter for .webm files created during this session
+        const recentVideos = files
+          .filter(file => file.endsWith('.webm'))
+          .map(file => {
+            const fullPath = path.join(tempDir, file);
+            const stats = fs.statSync(fullPath);
+            return {
+              path: fullPath,
+              mtime: stats.mtime.getTime(),
+              size: stats.size
             };
-          }
-        } catch (ffmpegError) {
-          log(`FFmpeg enhancement failed: ${ffmpegError.message}`);
-          log(`FFmpeg error stack: ${ffmpegError.stack}`);
-          return { 
-            fileName: foundVideoFile.filename,
-            logFile: path.basename(logFilePath),
-            metricsFile: path.basename(metricsFilePath)
-          };
+          })
+          .filter(video => {
+            return video.mtime >= sessionStartTime && video.size > 1024;
+          })
+          .sort((a, b) => b.mtime - a.mtime); // Most recent first
+        
+        log(`Found ${recentVideos.length} recent video files from this session`);
+        
+        // Log all found videos for debugging
+        recentVideos.forEach((video, index) => {
+          log(`Video #${index + 1}: ${video.path}, modified: ${new Date(video.mtime).toISOString()}, size: ${video.size} bytes`);
+        });
+        
+        // Use the most recent video if available
+        if (recentVideos.length > 0) {
+          recordedVideoPath = recentVideos[0].path;
+          log(`Using most recent video: ${recordedVideoPath}, size: ${recentVideos[0].size} bytes`);
+        } else {
+          log(`No recent videos found in temp directory`);
         }
-      } catch (enhancementError) {
-        log(`Video enhancement error: ${enhancementError.message}`);
-        log(`Enhancement error stack: ${enhancementError.stack}`);
-        return { 
-          fileName: foundVideoFile.filename,
-          logFile: path.basename(logFilePath),
-          metricsFile: path.basename(metricsFilePath)
-        };
+      } catch (searchError) {
+        log(`Error searching for videos: ${searchError.message}`);
       }
     }
+    
+    // Handle the recording file and enhance quality
+    if (recordedVideoPath && fs.existsSync(recordedVideoPath)) {
+      const fileSize = fs.statSync(recordedVideoPath).size;
+      log(`Raw video found, size: ${fileSize} bytes`);
+      
+      // Copy to the raw video location first
+      log(`Copying raw video to: ${rawVideoPath}`);
+      fs.copyFileSync(recordedVideoPath, rawVideoPath);
+      
+      // Enhance the video quality with ffmpeg
+      log('Enhancing video quality with ffmpeg...');
+      
+      try {
+        // Enhance the video quality
+        await enhanceVideoQuality(rawVideoPath, finalVideoPath, log);
+        
+        if (fs.existsSync(finalVideoPath)) {
+          const enhancedSize = fs.statSync(finalVideoPath).size;
+          log(`Enhanced video created successfully: ${finalVideoPath}, size: ${enhancedSize} bytes`);
+          
+          // Set proper permissions
+          fs.chmodSync(finalVideoPath, 0o644);
+          
+          // Return the enhanced video path
+          return { 
+            fileName: path.basename(finalVideoPath),
+            logFile: path.basename(logFilePath),
+            metricsFile: path.basename(metricsFilePath),
+            enhanced: true
+          };
+        } else {
+          log('Failed to create enhanced video, falling back to original');
+          
+          // Copy the original as fallback
+          fs.copyFileSync(rawVideoPath, finalVideoPath);
+          
+          return { 
+            fileName: path.basename(finalVideoPath),
+            logFile: path.basename(logFilePath),
+            metricsFile: path.basename(metricsFilePath),
+            enhanced: false
+          };
+        }
+      } catch (enhanceError) {
+        log(`Error enhancing video: ${enhanceError.message}`);
+        
+        // Copy the original as fallback
+        fs.copyFileSync(rawVideoPath, finalVideoPath);
+        
+        return { 
+          fileName: path.basename(finalVideoPath),
+          logFile: path.basename(logFilePath),
+          metricsFile: path.basename(metricsFilePath),
+          enhanced: false,
+          enhanceError: enhanceError.message
+        };
+      }
+    } else {
+      log(`No video recording found at: ${recordedVideoPath}`);
+    }
+    
+    // If video recording failed, return error
+    log(`Video recording failed`);
+    return { 
+      error: "Failed to create video recording",
+      logFile: path.basename(logFilePath),
+      metricsFile: path.basename(metricsFilePath)
+    };
   } catch (error) {
     log(`Recording error: ${error.message}`);
-    log(`Recording error stack: ${error.stack}`);
-    // Return the log file name even if there was an error
+    log(`Error stack: ${error.stack}`);
+    
     return { 
       error: error.message,
       logFile: path.basename(logFilePath),
       metricsFile: path.basename(metricsFilePath)
     };
   } finally {
-    if (browser) {
-      log('Closing browser');
-      try {
-        await browser.close();
-        log('Browser closed');
-      } catch (closeError) {
-        log(`Error closing browser: ${closeError.message}`);
+    // Clean up resources in order
+    try {
+      // Context is usually already closed in the normal flow
+      if (context) {
+        try {
+          await context.close().catch(e => log(`Context close error: ${e.message}`));
+          log('Context closed in finally block');
+        } catch (contextError) {
+          log(`Error closing context: ${contextError.message}`);
+        }
       }
+      
+      // Always close browser last
+      if (browser) {
+        await browser.close().catch(e => log(`Browser close error: ${e.message}`));
+        log('Browser closed');
+      }
+      
+      // Cleanup temporary raw video if it exists
+      if (fs.existsSync(rawVideoPath)) {
+        try {
+          fs.unlinkSync(rawVideoPath);
+          log(`Temporary raw video deleted: ${rawVideoPath}`);
+        } catch (unlinkError) {
+          log(`Warning: Failed to delete temporary raw video: ${unlinkError.message}`);
+        }
+      }
+    } catch (finallyError) {
+      log(`Error in cleanup: ${finallyError.message}`);
     }
     
     log(`Recording session ${sessionId} complete`);
   }
 }
 
-// Function to get the most recent log file
+// Get the most recent log file
 function getLatestLogFile() {
-  try {
-    if (!fs.existsSync(logsDir)) {
-      return null;
-    }
-    
-    const logFiles = fs.readdirSync(logsDir)
-      .filter(file => file.endsWith('.log'))
-      .map(file => {
-        const filePath = path.join(logsDir, file);
-        return {
-          name: file,
-          path: filePath,
-          time: fs.statSync(filePath).mtime.getTime()
-        };
-      })
-      .sort((a, b) => b.time - a.time); // Sort by most recent first
-    
-    return logFiles.length > 0 ? logFiles[0] : null;
-  } catch (error) {
-    console.error(`Error finding latest log file: ${error.message}`);
-    return null;
-  }
+  if (!fs.existsSync(logsDir)) return null;
+  
+  const logFiles = fs.readdirSync(logsDir)
+    .filter(file => file.endsWith('.log'))
+    .map(file => ({
+      name: file,
+      path: path.join(logsDir, file),
+      time: fs.statSync(path.join(logsDir, file)).mtime.getTime()
+    }))
+    .sort((a, b) => b.time - a.time);
+  
+  return logFiles.length > 0 ? logFiles[0] : null;
 }
 
 module.exports = { recordWebsite, getLatestLogFile };
