@@ -37,23 +37,99 @@ function createSessionLogger(sessionId) {
   console.log(`[DEBUG] Creating log file: ${logFilePath}`);
   console.log(`[DEBUG] Creating metrics file: ${metricsFilePath}`);
   
-  // Create a write stream for the log file
-  const logStream = fs.createWriteStream(logFilePath, { flags: 'a' });
-  const metricsStream = fs.createWriteStream(metricsFilePath, { flags: 'a' });
+  // First check permissions on directories
+  try {
+    console.log(`[DEBUG] Checking directory write permissions`);
+    
+    // Make sure metrics directory exists and has proper permissions
+    if (!fs.existsSync(metricsDir)) {
+      console.log(`[DEBUG] Metrics directory doesn't exist, creating it`);
+      fs.mkdirSync(metricsDir, { recursive: true });
+    }
+    
+    // Force permissions on metrics directory using system command
+    try {
+      console.log(`[DEBUG] Setting 777 permissions on metrics directory using system command`);
+      execSync(`chmod -R 777 "${metricsDir}"`, { stdio: 'inherit' });
+    } catch (chmodError) {
+      console.log(`[DEBUG] chmod command failed: ${chmodError.message}`);
+    }
+    
+    // Test if we can create a test file in the metrics directory
+    const testFile = path.join(metricsDir, `test-metrics-${Date.now()}.log`);
+    try {
+      fs.writeFileSync(testFile, "Test metrics file created\n");
+      console.log(`[DEBUG] Successfully created test metrics file: ${testFile}`);
+      
+      // Check if test file exists and is readable
+      if (fs.existsSync(testFile)) {
+        console.log(`[DEBUG] Test file exists and is readable`);
+        
+        // Try to read content
+        const content = fs.readFileSync(testFile, 'utf8');
+        console.log(`[DEBUG] Test file content: ${content}`);
+      } else {
+        console.log(`[DEBUG] Test file does not exist after write!`);
+      }
+    } catch (testFileError) {
+      console.log(`[DEBUG] Failed to create test metrics file: ${testFileError.message}`);
+    }
+  } catch (error) {
+    console.log(`[DEBUG] Error checking directory permissions: ${error.message}`);
+  }
   
-  // Verify streams are created
-  console.log(`[DEBUG] Log stream created: ${!!logStream}`);
-  console.log(`[DEBUG] Metrics stream created: ${!!metricsStream}`);
+  // Create a write stream for the log file
+  let logStream;
+  let metricsStream;
+  
+  try {
+    logStream = fs.createWriteStream(logFilePath, { flags: 'a' });
+    console.log(`[DEBUG] Log stream created: ${!!logStream}`);
+  } catch (logStreamError) {
+    console.log(`[DEBUG] Failed to create log stream: ${logStreamError.message}`);
+    // Create fallback log stream to tempdir
+    const tempLogPath = path.join(os.tmpdir(), `recording-${sessionId}-${timestamp}.log`);
+    console.log(`[DEBUG] Using fallback log path: ${tempLogPath}`);
+    logStream = fs.createWriteStream(tempLogPath, { flags: 'a' });
+  }
+  
+  try {
+    metricsStream = fs.createWriteStream(metricsFilePath, { flags: 'a' });
+    console.log(`[DEBUG] Metrics stream created: ${!!metricsStream}`);
+  } catch (metricsStreamError) {
+    console.log(`[DEBUG] Failed to create metrics stream: ${metricsStreamError.message}`);
+    // Create fallback metrics stream to tempdir
+    const tempMetricsPath = path.join(os.tmpdir(), `metrics-${sessionId}-${timestamp}.log`);
+    console.log(`[DEBUG] Using fallback metrics path: ${tempMetricsPath}`);
+    metricsStream = fs.createWriteStream(tempMetricsPath, { flags: 'a' });
+  }
   
   // Write initial test entries to verify streams work
-  logStream.write(`[${new Date().toISOString()}] Log file created for session ${sessionId}\n`);
-  metricsStream.write(`[${new Date().toISOString()}] Metrics file created for session ${sessionId}\n`);
+  try {
+    const initialLogEntry = `[${new Date().toISOString()}] Log file created for session ${sessionId}\n`;
+    logStream.write(initialLogEntry);
+    console.log(`[DEBUG] Successfully wrote to log file: ${initialLogEntry}`);
+  } catch (logWriteError) {
+    console.log(`[DEBUG] Failed to write to log file: ${logWriteError.message}`);
+  }
+  
+  try {
+    const initialMetricsEntry = `[${new Date().toISOString()}] Metrics file created for session ${sessionId}\n`;
+    metricsStream.write(initialMetricsEntry);
+    console.log(`[DEBUG] Successfully wrote to metrics file: ${initialMetricsEntry}`);
+  } catch (metricsWriteError) {
+    console.log(`[DEBUG] Failed to write to metrics file: ${metricsWriteError.message}`);
+  }
   
   // Create a logger function that writes to both console and log file
   const logger = (message) => {
     const timestampedMessage = `[${new Date().toISOString()}] ${message}`;
     console.log(timestampedMessage);
-    logStream.write(timestampedMessage + '\n');
+    try {
+      logStream.write(timestampedMessage + '\n');
+    } catch (err) {
+      console.error(`[DEBUG] Failed to write to log file: ${err.message}`);
+    }
   };
   
   // Create a metrics logger specifically for performance data
@@ -63,6 +139,14 @@ function createSessionLogger(sessionId) {
     try {
       metricsStream.write(timestampedMessage + '\n');
       console.log(`[DEBUG] Successfully wrote metrics: ${message.substring(0, 50)}...`);
+      
+      // Verify file exists after write
+      if (fs.existsSync(metricsFilePath)) {
+        console.log(`[DEBUG] Metrics file exists after write: ${metricsFilePath}`);
+        console.log(`[DEBUG] Metrics file size: ${fs.statSync(metricsFilePath).size} bytes`);
+      } else {
+        console.log(`[DEBUG] Metrics file does not exist after write!`);
+      }
     } catch (err) {
       console.error(`[DEBUG] Failed to write to metrics file: ${err.message}`);
     }
