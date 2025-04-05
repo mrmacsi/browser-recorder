@@ -55,8 +55,8 @@ const ACTIVITY_DELAY = 150; // Reduced delay for even smoother activity
 const VIDEO_WIDTH = 1920; // Always use full HD
 const VIDEO_HEIGHT = 1080; // Always use full HD
 const FFMPEG_PATH = process.env.FFMPEG_PATH || 'ffmpeg';
-const USE_HARDWARE_ACCELERATION = true; // Always enable hardware acceleration for local
-const DISABLE_PAGE_ACTIVITY = process.env.DISABLE_PAGE_ACTIVITY === 'true' || true; // Default to disabled
+const USE_HARDWARE_ACCELERATION = process.env.NODE_ENV === 'development'; // Only use hardware acceleration in dev mode
+const DISABLE_PAGE_ACTIVITY = false; // Enable page activity to ensure recording works
 
 console.log(`Video settings: ${VIDEO_WIDTH}x${VIDEO_HEIGHT} @ ${VIDEO_FPS}fps`);
 console.log(`Hardware acceleration: ${USE_HARDWARE_ACCELERATION ? 'Enabled' : 'Disabled'}`);
@@ -201,17 +201,13 @@ async function recordWebsite(url, duration = 10) {
   // Launch browser with appropriate configuration
   let browser;
   try {
-    // Optimize browser arguments based on system capabilities
+    // Base browser arguments for all environments
     const browserArgs = [
       '--no-sandbox',
       '--disable-setuid-sandbox',
       '--disable-dev-shm-usage',
       '--no-first-run',
       '--no-zygote',
-      '--high-dpi-support=1',
-      '--force-device-scale-factor=1',
-      `--js-flags=--max-old-space-size=${Math.min(4096, totalMem * 1024 / 2)}`,
-      `--renderer-process-limit=${Math.max(4, numCPUs)}`,
       '--disable-web-security',
       '--autoplay-policy=no-user-gesture-required',
       '--disable-extensions',
@@ -220,35 +216,31 @@ async function recordWebsite(url, duration = 10) {
       '--disable-backgrounding-occluded-windows',
       '--disable-breakpad',
       '--disable-component-extensions-with-background-pages',
-      '--disable-features=TranslateUI,BlinkGenPropertyTrees,ScriptStreaming',
       '--disable-ipc-flooding-protection',
       '--disable-renderer-backgrounding',
       '--mute-audio',
       '--disable-sync',
       '--memory-pressure-off',
-      '--disable-hang-monitor',
-      '--disable-domain-reliability',
-      '--aggressive-cache-discard',
-      `--disable-features=site-per-process`,
-      `--run-all-compositor-stages-before-draw`
+      '--disable-hang-monitor'
     ];
     
-    // Add hardware acceleration flags if available
+    // Add hardware acceleration flags if available and in development mode
     if (USE_HARDWARE_ACCELERATION) {
+      console.log('Using hardware acceleration for video recording');
       browserArgs.push(
         '--enable-gpu-rasterization',
-        '--enable-zero-copy',
         '--enable-accelerated-video-decode',
-        '--enable-accelerated-mjpeg-decode',
         '--enable-accelerated-2d-canvas',
         '--ignore-gpu-blocklist'
       );
     } else {
+      console.log('Using software rendering for video recording');
       browserArgs.push('--disable-gpu');
       browserArgs.push('--disable-accelerated-2d-canvas');
       browserArgs.push('--use-gl=swiftshader');
     }
     
+    console.log(`Launching browser with ${browserArgs.length} arguments`);
     browser = await chromium.launch({
       headless: true,
       executablePath: process.env.CHROME_PATH,
@@ -256,6 +248,7 @@ async function recordWebsite(url, duration = 10) {
       timeout: 60000,
       args: browserArgs
     });
+    console.log('Browser launched successfully');
   } catch (error) {
     console.error('Failed to launch browser:', error.message);
     if (error.message.includes("Executable doesn't exist")) {
@@ -267,6 +260,7 @@ async function recordWebsite(url, duration = 10) {
   }
 
   try {
+    console.log('Creating browser context with video recording enabled');
     // Create a browser context with video recording enabled with improved settings
     const context = await browser.newContext({
       viewport: { width: VIDEO_WIDTH, height: VIDEO_HEIGHT },
@@ -277,16 +271,16 @@ async function recordWebsite(url, duration = 10) {
       },
       ignoreHTTPSErrors: true,
       bypassCSP: true,
-      deviceScaleFactor: 2.0, // Increased for sharper rendering
+      deviceScaleFactor: 1.0, // Reduced to avoid rendering issues
       hasTouch: false,
       isMobile: false,
       javaScriptEnabled: true,
       userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/96.0.4664.110 Safari/537.36',
       extraHTTPHeaders: {
         'Accept-Language': 'en-US,en;q=0.9'
-      },
-      offline: false,
+      }
     });
+    console.log('Browser context created successfully');
 
     // Force garbage collection to free memory before recording
     try {
@@ -321,15 +315,20 @@ async function recordWebsite(url, duration = 10) {
       // Add some initial interactivity to make sure the video has content
       if (!DISABLE_PAGE_ACTIVITY) {
         console.log(`Generating initial page activity...`);
-        // Only generate activity for 2 seconds at the beginning instead of full duration
-        await generatePageActivity(page, 2000);
+        // Generate activity for longer duration to ensure recording works
+        await generatePageActivity(page, 5000);
+        
+        // Wait for the remainder of the recording time
+        const remainingTime = (duration * 1000) - 5000;
+        if (remainingTime > 0) {
+          console.log(`Waiting for the remaining recording time (${remainingTime}ms)...`);
+          await page.waitForTimeout(remainingTime);
+        }
       } else {
         console.log(`Page activity disabled, recording page as-is...`);
+        // Wait for the full recording time
+        await page.waitForTimeout(duration * 1000);
       }
-      
-      // Wait for the remainder of the recording time
-      console.log(`Waiting for the remaining recording time...`);
-      await page.waitForTimeout((duration * 1000) - 2000);
       
     } catch (navigationError) {
       console.warn(`Navigation issue: ${navigationError.message}`);
@@ -351,6 +350,7 @@ async function recordWebsite(url, duration = 10) {
     // If using RAM disk, copy the file to uploads directory
     if (useRamDisk && videoPath && fs.existsSync(videoPath)) {
       const destFile = path.join(uploadsDir, path.basename(videoPath));
+      console.log(`Copying video from temp directory: ${videoPath} to ${destFile}`);
       fs.copyFileSync(videoPath, destFile);
       fs.unlinkSync(videoPath); // Remove the temp file
       foundVideoFile = {
@@ -358,7 +358,9 @@ async function recordWebsite(url, duration = 10) {
         path: destFile,
         size: fs.statSync(destFile).size
       };
+      console.log(`Video copied successfully, size: ${foundVideoFile.size} bytes`);
     } else {
+      console.log(`Looking for recording in uploads directory: ${uploadsDir}`);
       foundVideoFile = findPlaywrightRecording(uploadsDir);
     }
     

@@ -8,7 +8,7 @@ module.exports = {
     max_memory_restart: '1G',
     env: {
       NODE_ENV: 'production',
-      PORT: 7777,
+      PORT: 5443,
       HTTPS_PORT: 5443,
       NODE_OPTIONS: '--max-old-space-size=4096',
       SSL_KEY_PATH: '/etc/ssl/browser-recorder/privkey.pem',
