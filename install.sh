@@ -90,11 +90,18 @@ sudo sysctl -w vm.swappiness=10
 echo "vm.swappiness=10" | sudo tee -a /etc/sysctl.conf
 
 # Create a RAM disk for temporary files to improve I/O performance
-echo "Setting up RAM disk for temporary files..."
+echo "Setting up RAM disk for temporary files with proper permissions..."
 sudo mkdir -p /mnt/ramdisk
 sudo mount -t tmpfs -o size=2G tmpfs /mnt/ramdisk
-# Make RAM disk mount persistent
+# Make RAM disk world-writable (sticky bit + 777 permissions)
+sudo chmod 1777 /mnt/ramdisk
+# Make RAM disk mount persistent with proper permissions
 echo "tmpfs /mnt/ramdisk tmpfs size=2G,mode=1777 0 0" | sudo tee -a /etc/fstab
+
+# Ensure uploads and logs directories exist with proper permissions
+echo "Setting up uploads and logs directories with proper permissions..."
+sudo mkdir -p ${REPO_DIR}/uploads ${REPO_DIR}/logs
+sudo chmod 777 ${REPO_DIR}/uploads ${REPO_DIR}/logs
 
 # Set up performance-optimized NODE_OPTIONS
 echo "Configuring Node.js for improved performance..."
@@ -104,13 +111,52 @@ source /etc/profile.d/node-performance.sh
 
 # Check for hardware acceleration capabilities
 echo "Checking for hardware acceleration capabilities..."
-if vainfo &> /dev/null; then
+HAS_HARDWARE_ACCEL=false
+
+# Check for GPU availability
+if command -v lspci &> /dev/null; then
+  if lspci | grep -i 'vga\|3d\|2d' | grep -i 'nvidia\|intel\|amd' &> /dev/null; then
+    echo "GPU detected via lspci"
+    HAS_HARDWARE_ACCEL=true
+  fi
+fi
+
+# Check for VA-API support
+if command -v vainfo &> /dev/null && vainfo &> /dev/null; then
+  echo "Hardware acceleration is available via VA-API!"
+  HAS_HARDWARE_ACCEL=true
+fi
+
+if [ "$HAS_HARDWARE_ACCEL" = true ]; then
   echo "Hardware acceleration is available!"
   echo 'export HARDWARE_ACCELERATION="true"' | sudo tee -a /etc/profile.d/node-performance.sh
+  # Load the environment variable right away
+  export HARDWARE_ACCELERATION="true"
 else
   echo "Hardware acceleration is not available."
   echo 'export HARDWARE_ACCELERATION="false"' | sudo tee -a /etc/profile.d/node-performance.sh
+  # Load the environment variable right away
+  export HARDWARE_ACCELERATION="false"
 fi
+
+# Configure systemd optimization for video performance
+echo "Optimizing system for video performance..."
+# Disable unnecessary services
+if systemctl list-unit-files | grep -q 'snapd.service'; then
+  sudo systemctl stop snapd.service snapd.socket snapd.apparmor.service || true
+  sudo systemctl disable snapd.service snapd.socket snapd.apparmor.service || true
+  echo "Disabled snapd services for better performance"
+fi
+
+# Configure CPU governor for performance if available
+if [ -f /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor ]; then
+  echo "Setting CPU governor to performance mode..."
+  echo performance | sudo tee /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor || true
+fi
+
+# Setup process priority for better performance
+echo "* soft nice -10" | sudo tee -a /etc/security/limits.conf
+echo "* soft rtprio 99" | sudo tee -a /etc/security/limits.conf
 
 # Setup SSL certificates
 echo "Setting up SSL certificates..."

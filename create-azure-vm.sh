@@ -257,4 +257,39 @@ echo "  - GET https://$PUBLIC_IP:5443/api/files - List recordings"
 echo "  - GET https://$PUBLIC_IP:5443/uploads/[filename] - Access recorded videos"
 echo ""
 echo "NOTE: Since we're using a self-signed certificate, browsers will show a security warning when using HTTPS."
-echo "You can proceed by accepting the risk or exception in your browser." 
+echo "You can proceed by accepting the risk or exception in your browser."
+
+# After the VM is created, run additional setup for video recording
+echo "Configuring VM for optimal video recording and playback performance..."
+az vm run-command invoke \
+  --resource-group "$RESOURCE_GROUP" \
+  --name "$VM_NAME" \
+  --command-id RunShellScript \
+  --scripts "
+    # Set git to trust the project directory to avoid 'dubious ownership' errors
+    git config --global --add safe.directory /home/azureuser/project
+    
+    # Optimize VM for video processing
+    echo 'vm.swappiness=10' | sudo tee -a /etc/sysctl.conf
+    echo 'vm.dirty_ratio=60' | sudo tee -a /etc/sysctl.conf
+    echo 'vm.dirty_background_ratio=30' | sudo tee -a /etc/sysctl.conf
+    
+    # Apply sysctl changes
+    sudo sysctl -p
+    
+    # Disable unnecessary services for better performance
+    sudo systemctl disable snapd snapd.socket || true
+    
+    # Ensure RAM disk has proper permissions
+    sudo mkdir -p /mnt/ramdisk
+    sudo mount -t tmpfs -o size=2G tmpfs /mnt/ramdisk
+    sudo chmod 1777 /mnt/ramdisk
+    echo 'tmpfs /mnt/ramdisk tmpfs size=2G,mode=1777 0 0' | sudo tee -a /etc/fstab
+    
+    # Pre-create logs and uploads directories with proper permissions
+    sudo mkdir -p /home/azureuser/project/logs /home/azureuser/project/uploads
+    sudo chmod 777 /home/azureuser/project/logs /home/azureuser/project/uploads
+    
+    # Set ownership to allow application to write to these directories
+    sudo chown -R azureuser:azureuser /home/azureuser/project
+  " 

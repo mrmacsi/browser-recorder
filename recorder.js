@@ -102,14 +102,24 @@ try {
 
 // Configure video optimization based on system resources
 const VIDEO_FPS = 60; // Increased to 60fps for smoother playback
-const ACTIVITY_DELAY = 150; // Reduced delay for even smoother activity
+const TARGET_FPS = 30; // Target FPS we aim to achieve at minimum
+const ACTIVITY_DELAY = 100; // Reduced delay for even smoother activity (was 150)
 const VIDEO_WIDTH = 1920; // Always use full HD
 const VIDEO_HEIGHT = 1080; // Always use full HD
 const FFMPEG_PATH = process.env.FFMPEG_PATH || 'ffmpeg';
-const USE_HARDWARE_ACCELERATION = process.env.NODE_ENV === 'development'; // Only use hardware acceleration in dev mode
+// Always try to use hardware acceleration when available, regardless of environment
+const USE_HARDWARE_ACCELERATION = process.env.HARDWARE_ACCELERATION === 'true' || process.env.NODE_ENV === 'development';
 const DISABLE_PAGE_ACTIVITY = false; // Enable page activity to ensure recording works
 
-console.log(`[DEBUG] Video settings: ${VIDEO_WIDTH}x${VIDEO_HEIGHT} @ ${VIDEO_FPS}fps`);
+// Maintain frame timing metrics
+const frameMetrics = {
+  startTime: 0,
+  frameCount: 0,
+  lastFrameTime: 0,
+  measurements: []
+};
+
+console.log(`[DEBUG] Video settings: ${VIDEO_WIDTH}x${VIDEO_HEIGHT} @ ${VIDEO_FPS}fps (target: ${TARGET_FPS}fps)`);
 console.log(`[DEBUG] Hardware acceleration: ${USE_HARDWARE_ACCELERATION ? 'Enabled' : 'Disabled'}`);
 console.log(`[DEBUG] Page activity: ${DISABLE_PAGE_ACTIVITY ? 'Disabled' : 'Enabled'}`);
 
@@ -163,6 +173,12 @@ async function generatePageActivity(page, durationMs) {
   
   console.log(`[DEBUG] Starting page activity for ${durationMs}ms to ensure recording has content...`);
   
+  // Frame timing variables
+  frameMetrics.startTime = startTime;
+  frameMetrics.frameCount = 0;
+  frameMetrics.lastFrameTime = startTime;
+  frameMetrics.measurements = [];
+  
   // Create a function to perform mouse movement only (no scrolling)
   const performActivity = async () => {
     try {
@@ -174,6 +190,13 @@ async function generatePageActivity(page, durationMs) {
           const y = Math.floor(Math.random() * viewportSize.height);
           console.log(`[DEBUG] Moving mouse to ${x},${y}`);
           await page.mouse.move(x, y);
+          
+          // Record frame timing
+          const now = Date.now();
+          const frameDuration = now - frameMetrics.lastFrameTime;
+          frameMetrics.frameCount++;
+          frameMetrics.lastFrameTime = now;
+          frameMetrics.measurements.push(frameDuration);
         }
       } catch (mouseError) {
         console.log(`[DEBUG] Mouse movement error: ${mouseError.message}`);
@@ -194,7 +217,23 @@ async function generatePageActivity(page, durationMs) {
     await new Promise(resolve => setTimeout(resolve, ACTIVITY_DELAY));
   }
   
+  // Calculate frame rate statistics
+  const totalDuration = Date.now() - startTime;
+  const fps = Math.round((frameMetrics.frameCount * 1000) / totalDuration);
+  const frameTimes = frameMetrics.measurements;
+  const avgFrameTime = frameTimes.length > 0 ? frameTimes.reduce((a, b) => a + b, 0) / frameTimes.length : 0;
+  const minFrameTime = frameTimes.length > 0 ? Math.min(...frameTimes) : 0;
+  const maxFrameTime = frameTimes.length > 0 ? Math.max(...frameTimes) : 0;
+  
   console.log(`[DEBUG] Page activity completed with ${activityCount} mouse movements`);
+  console.log(`[DEBUG] Frame statistics: ${fps} FPS, Avg: ${avgFrameTime.toFixed(2)}ms, Min: ${minFrameTime}ms, Max: ${maxFrameTime}ms`);
+  
+  return {
+    fps,
+    avgFrameTime,
+    minFrameTime,
+    maxFrameTime
+  };
 }
 
 // Function to look for video files in a specified directory
@@ -294,6 +333,8 @@ async function recordWebsite(url, duration = 10) {
   log(`Starting recording session ${sessionId} for ${url} with duration ${duration}s`);
   log(`System info: ${numCPUs} CPU cores, ${totalMem}GB RAM, Platform: ${os.platform()}, Release: ${os.release()}`);
   log(`Free memory: ${Math.floor(os.freemem() / (1024 * 1024))}MB`);
+  log(`Video settings: ${VIDEO_WIDTH}x${VIDEO_HEIGHT} @ ${VIDEO_FPS}fps (target: ${TARGET_FPS}fps)`);
+  log(`Hardware acceleration: ${USE_HARDWARE_ACCELERATION ? 'Enabled' : 'Disabled'}`);
   
   // Double-check that uploads directory exists
   if (!fs.existsSync(uploadsDir)) {
@@ -357,20 +398,35 @@ async function recordWebsite(url, duration = 10) {
       '--mute-audio',
       '--disable-sync',
       '--memory-pressure-off',
-      '--disable-hang-monitor'
+      '--disable-hang-monitor',
+      // Performance improvements
+      '--disable-features=site-per-process',
+      '--disable-features=TranslateUI,BlinkGenPropertyTrees',
+      '--disable-threaded-animation',
+      '--disable-threaded-scrolling',
+      '--disable-checker-imaging',
+      '--blink-settings=primaryHoverType=2,availableHoverTypes=2,primaryPointerType=4,availablePointerTypes=4',
+      // Memory optimization
+      '--single-process', // More performant for recording only
+      '--renderer-process-limit=1',
+      '--disable-default-apps'
     ];
     
     // Add hardware acceleration flags if available and in development mode
     if (USE_HARDWARE_ACCELERATION) {
-      console.log('[DEBUG] Using hardware acceleration for video recording');
+      log('Using hardware acceleration for video recording');
       browserArgs.push(
         '--enable-gpu-rasterization',
         '--enable-accelerated-video-decode',
         '--enable-accelerated-2d-canvas',
+        '--enable-accelerated-video',
+        '--enable-native-gpu-memory-buffers',
+        '--enable-gpu-compositing',
+        '--enable-oop-rasterization',
         '--ignore-gpu-blocklist'
       );
     } else {
-      console.log('[DEBUG] Using software rendering for video recording');
+      log('Using software rendering for video recording');
       browserArgs.push('--disable-gpu');
       browserArgs.push('--disable-accelerated-2d-canvas');
       browserArgs.push('--use-gl=swiftshader');
@@ -500,11 +556,14 @@ async function recordWebsite(url, duration = 10) {
         log(`Failed to take screenshot: ${screenshotError.message}`);
       }
       
-      // Add some initial interactivity to make sure the video has content
+      // Generate activity for longer duration to ensure recording works
+      let frameStats = null;
       if (!DISABLE_PAGE_ACTIVITY) {
         log(`Generating initial page activity...`);
         // Generate activity for longer duration to ensure recording works
-        await generatePageActivity(page, 5000);
+        frameStats = await generatePageActivity(page, 5000);
+        log(`Frame rate statistics: ${frameStats.fps} FPS, Avg frame time: ${frameStats.avgFrameTime.toFixed(2)}ms`);
+        log(`Frame time range: Min=${frameStats.minFrameTime}ms, Max=${frameStats.maxFrameTime}ms`);
         hasContent = true;
         
         // Wait for the remainder of the recording time
@@ -721,19 +780,28 @@ async function recordWebsite(url, duration = 10) {
           log('Checking if ffmpeg is available');
           execSync(`${FFMPEG_PATH} -version`, { stdio: 'ignore' });
           
-          // Choose optimal encoding settings based on hardware capabilities
+          // Choose optimal encoding settings based on hardware capabilities and measured performance
           let ffmpegCmd;
+          
+          // If we got good frame rates, use higher quality settings
+          const achievedGoodFps = frameStats && frameStats.fps >= TARGET_FPS;
+          
+          // Optimize ffmpeg parameters based on the frame rate we achieved
           if (isDev) {
-            // Fast mode for development - speed over quality
-            ffmpegCmd = `${FFMPEG_PATH} -y -i "${originalPath}" -c:v libvpx-vp9 -b:v 4M -deadline realtime -cpu-used 4 -pix_fmt yuv420p -quality good -crf 20 -speed 4 -threads ${numCPUs} "${enhancedPath}"`;
+            // Fast mode for development - speed over quality, but still decent
+            ffmpegCmd = `${FFMPEG_PATH} -y -i "${originalPath}" -c:v libvpx-vp9 -b:v 4M ${achievedGoodFps ? '-deadline realtime' : '-deadline good'} -cpu-used ${achievedGoodFps ? '4' : '2'} -pix_fmt yuv420p -quality ${achievedGoodFps ? 'realtime' : 'good'} -crf ${achievedGoodFps ? '22' : '20'} -speed ${achievedGoodFps ? '8' : '4'} -threads ${numCPUs} "${enhancedPath}"`;
           } else {
             // Balanced mode for production - good quality with reasonable speed
-            ffmpegCmd = `${FFMPEG_PATH} -y -i "${originalPath}" -c:v libvpx-vp9 -b:v 6M -deadline good -cpu-used 2 -pix_fmt yuv420p -quality good -crf 18 -speed 3 -threads ${numCPUs} "${enhancedPath}"`;
+            ffmpegCmd = `${FFMPEG_PATH} -y -i "${originalPath}" -c:v libvpx-vp9 -b:v 6M -deadline ${achievedGoodFps ? 'good' : 'best'} -cpu-used ${achievedGoodFps ? '2' : '0'} -pix_fmt yuv420p -quality good -crf ${achievedGoodFps ? '18' : '15'} -speed ${achievedGoodFps ? '2' : '1'} -threads ${numCPUs} "${enhancedPath}"`;
           }
+          
+          // Add frame rate info to the log
+          log(`Enhancing video with ffmpeg (quality: ${achievedGoodFps ? 'optimized for speed' : 'optimized for quality'}): ${enhancedPath}`);
+          log(`Measured performance: ${frameStats ? frameStats.fps + ' FPS' : 'No measurements available'}`);
+          log(`ffmpeg command: ${ffmpegCmd}`);
           
           // Enhance video with ffmpeg for smoother playback
           log(`Enhancing video with ffmpeg (fast mode: ${isDev}): ${enhancedPath}`);
-          log(`ffmpeg command: ${ffmpegCmd}`);
           try {
             execSync(ffmpegCmd, { 
               stdio: 'inherit',
@@ -829,4 +897,4 @@ function getLatestLogFile() {
   }
 }
 
-module.exports = { recordWebsite, getLatestLogFile }; 
+module.exports = { recordWebsite, getLatestLogFile };
