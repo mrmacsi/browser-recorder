@@ -30,12 +30,22 @@ const metricsDir = path.resolve(__dirname, 'logs', 'metrics');
 const uploadsDir = path.resolve(__dirname, 'uploads');
 const tempVideoDir = path.resolve(__dirname, 'temp_videos');
 
-// Create necessary directories
-[logsDir, metricsDir, uploadsDir, tempVideoDir].forEach(dir => {
-  if (!fs.existsSync(dir)) {
-    fs.mkdirSync(dir, { recursive: true });
+// Create necessary directories with better error handling
+function ensureDirectoryExists(dir) {
+  try {
+    if (!fs.existsSync(dir)) {
+      console.log(`Creating directory: ${dir}`);
+      fs.mkdirSync(dir, { recursive: true });
+    }
+    return true;
+  } catch (error) {
+    console.error(`Failed to create directory ${dir}: ${error.message}`);
+    return false;
   }
-});
+}
+
+// Ensure all required directories exist
+[logsDir, metricsDir, uploadsDir, tempVideoDir].forEach(ensureDirectoryExists);
 
 // Determine optimal temp directory with improved memory management
 const isAzureVM = fs.existsSync('/mnt/resource');
@@ -79,7 +89,7 @@ function createSessionLogger(sessionId) {
 }
 
 // Function to enhance video quality using ffmpeg with two-pass encoding
-async function enhanceVideoQuality(inputPath, outputPath, logger) {
+async function enhanceVideoQuality(inputPath, outputPath, logger, videoOptions = {}) {
   return new Promise((resolve, reject) => {
     logger(`Enhancing video quality with two-pass encoding: ${inputPath} -> ${outputPath}`);
     
@@ -251,9 +261,14 @@ async function enhanceVideoQuality(inputPath, outputPath, logger) {
       }
     };
     
-          // Single-pass encoding as fallback
+    // Single-pass encoding as fallback
     const singlePassEncode = async () => {
       logger(`Starting single-pass encoding...`);
+      
+      // Get aspect ratio if provided (for vertical videos etc.)
+      const aspectRatio = videoOptions.aspectRatio || null;
+      const videoWidth = videoOptions.width || null;
+      const videoHeight = videoOptions.height || null;
       
       return new Promise((resolvePass, rejectPass) => {
         const ffmpegArgs = [
@@ -269,11 +284,24 @@ async function enhanceVideoQuality(inputPath, outputPath, logger) {
           '-tile-columns', '4', // More tiles for parallel processing
           '-pix_fmt', 'yuv420p', // Standard pixel format (faster)
           '-r', `${VIDEO_FPS}`,
-          '-vf', 'scale=out_color_matrix=bt709',
+        ];
+        
+        // Add aspect ratio forcing for vertical videos if specified
+        if (aspectRatio && videoWidth && videoHeight) {
+          // For vertical videos, ensure exact dimensions with -s parameter
+          ffmpegArgs.push('-s', `${videoWidth}x${videoHeight}`);
+          ffmpegArgs.push('-aspect', aspectRatio);
+          logger(`Enforcing aspect ratio ${aspectRatio} with dimensions ${videoWidth}x${videoHeight}`);
+        } else {
+          ffmpegArgs.push('-vf', 'scale=out_color_matrix=bt709');
+        }
+        
+        // Add remaining arguments
+        ffmpegArgs.push(
           '-movflags', '+faststart',
           '-y',
           outputPath
-        ];
+        );
         
         logger(`Running single-pass with args: ${ffmpegArgs.join(' ')}`);
         
@@ -332,11 +360,115 @@ async function enhanceVideoQuality(inputPath, outputPath, logger) {
   });
 }
 
+// Platform dimension presets
+const DIMENSIONS = {
+  SQUARE: { aspect: '1:1', width: { '720p': 720, '1080p': 1080, '2k': 1440 }, height: { '720p': 720, '1080p': 1080, '2k': 1440 } },
+  VERTICAL_9_16: { aspect: '9:16', width: { '720p': 405, '1080p': 607, '2k': 810 }, height: { '720p': 720, '1080p': 1080, '2k': 1440 } },
+  STANDARD_16_9: { aspect: '16:9', width: { '720p': 1280, '1080p': 1920, '2k': 2560 }, height: { '720p': 720, '1080p': 1080, '2k': 1440 } }
+};
+
+// Resolution presets (using 16:9 as reference)
+const RESOLUTIONS = {
+  '720p': { width: 1280, height: 720 },
+  '1080p': { width: 1920, height: 1080 },
+  '2k': { width: 2560, height: 1440 }
+};
+
+// API endpoint for recording with platform dimensions
+async function recordWithPlatformSettings(url, options = {}) {
+  const {
+    platform = 'STANDARD_16_9',
+    resolution = '1080p',
+    duration = 10,
+    quality = 'balanced',
+    fps = 30,
+    speed = 1
+  } = options;
+
+  // Set dimensions based on platform
+  let width, height;
+  switch (platform) {
+    case 'VERTICAL_9_16':
+      switch (resolution) {
+        case '720p': width = 720; height = 1280; break;
+        case '1080p': width = 1080; height = 1920; break;
+        case '2k': width = 1440; height = 2560; break;
+        default: width = 1080; height = 1920;
+      }
+      break;
+    case 'SQUARE':
+      switch (resolution) {
+        case '720p': width = 720; height = 720; break;
+        case '1080p': width = 1080; height = 1080; break;
+        case '2k': width = 1440; height = 1440; break;
+        default: width = 1080; height = 1080;
+      }
+      break;
+    case 'STANDARD_16_9':
+    default:
+      switch (resolution) {
+        case '720p': width = 1280; height = 720; break;
+        case '1080p': width = 1920; height = 1080; break;
+        case '2k': width = 2560; height = 1440; break;
+        default: width = 1920; height = 1080;
+      }
+  }
+
+  // Set quality settings
+  const qualitySettings = {
+    low: {
+      bitrate: '4M',
+      preset: 'realtime',
+      twoPass: false,
+      pixFormat: 'yuv420p'
+    },
+    balanced: {
+      bitrate: '8M',
+      preset: 'good',
+      twoPass: false,
+      pixFormat: 'yuv420p'
+    },
+    high: {
+      bitrate: '16M',
+      preset: 'good',
+      twoPass: true,
+      pixFormat: 'yuv444p'
+    }
+  };
+
+  const qualityConfig = qualitySettings[quality] || qualitySettings.balanced;
+
+  // Merge all options for recordWebsite
+  const recordOptions = {
+    viewportWidth: width,
+    viewportHeight: height,
+    videoWidth: width,
+    videoHeight: height,
+    fps,
+    bitrate: qualityConfig.bitrate,
+    qualityPreset: qualityConfig.preset,
+    twoPassEncoding: qualityConfig.twoPass,
+    pixFormat: qualityConfig.pixFormat,
+    speed
+  };
+
+  return recordWebsite(url, duration, recordOptions);
+}
+
 // Record a website with balanced quality
 async function recordWebsite(url, duration = 10, options = {}) {
   const sessionId = uuidv4().substr(0, 8);
   const { log, logMetrics, logFilePath, metricsFilePath } = createSessionLogger(sessionId);
   const sessionStartTime = Date.now();
+  
+  // Ensure uploads directory exists before recording
+  if (!ensureDirectoryExists(uploadsDir)) {
+    log(`ERROR: Uploads directory ${uploadsDir} could not be created or accessed`);
+    return { 
+      error: "Failed to create or access uploads directory",
+      logFile: path.basename(logFilePath)
+    };
+  }
   
   // Allow overriding default settings through options
   const videoWidth = options.width || VIDEO_WIDTH;
@@ -344,6 +476,15 @@ async function recordWebsite(url, duration = 10, options = {}) {
   const videoFps = options.fps || VIDEO_FPS;
   const fastMode = options.fastMode !== undefined ? options.fastMode : true; // Default to fast mode
   const quality = options.quality || 'balanced'; // 'low', 'balanced', 'high'
+  const platform = options.platform || null;
+  
+  // Add platform parameter to URL if it's not already there and platform is specified
+  let recordingUrl = url;
+  if (platform && !url.includes('platform=')) {
+    const separator = url.includes('?') ? '&' : '?';
+    recordingUrl = `${url}${separator}platform=${platform}`;
+    log(`Added platform=${platform} parameter to URL: ${recordingUrl}`);
+  }
   
   // Adjust quality settings based on selected quality profile
   let cpuUsed, pixFmt, encodeQuality;
@@ -369,7 +510,7 @@ async function recordWebsite(url, duration = 10, options = {}) {
   const numCPUs = os.cpus().length;
   const totalMem = Math.floor(os.totalmem() / (1024 * 1024 * 1024));
   
-  log(`Starting balanced recording session ${sessionId} for ${url} with duration ${duration}s`);
+  log(`Starting balanced recording session ${sessionId} for ${recordingUrl} with duration ${duration}s`);
   log(`System: ${numCPUs} CPU cores, ${totalMem}GB RAM, ${os.platform()}`);
   log(`Video settings: ${videoWidth}x${videoHeight} @ ${videoFps}fps, ${VIDEO_BITRATE} bitrate`);
   log(`Quality profile: ${quality}, Fast mode: ${fastMode ? 'ON' : 'OFF'}`);
@@ -463,13 +604,13 @@ async function recordWebsite(url, duration = 10, options = {}) {
     log(`Setting explicit recording path: ${recordingPath}`);
     
     context = await browser.newContext({
-      viewport: { width: VIDEO_WIDTH, height: VIDEO_HEIGHT },
+      viewport: { width: videoWidth, height: videoHeight },
       deviceScaleFactor: 2, // Better rendering on high-DPI displays
       colorScheme: 'light', // More consistent rendering
       recordVideo: {
         dir: tempDir,
-        size: { width: VIDEO_WIDTH, height: VIDEO_HEIGHT },
-        fps: VIDEO_FPS,
+        size: { width: videoWidth, height: videoHeight },
+        fps: videoFps,
         path: recordingPath // Explicitly set the recording path
       },
       ignoreHTTPSErrors: true,
@@ -496,16 +637,49 @@ async function recordWebsite(url, duration = 10, options = {}) {
       'Accept-Encoding': 'gzip, deflate, br'
     });
     
-    // Enable better JS performance
-    await page.addInitScript(() => {
+    // Enable better JS performance and add viewport information
+    await page.addInitScript(({ width, height, aspectRatio }) => {
       window.devicePixelRatio = 2; // Force high DPI rendering
+      
+      // Make viewport dimensions and aspect ratio available to the page
+      window.recordingViewport = {
+        width: width,
+        height: height,
+        aspectRatio: aspectRatio
+      };
+      
+      // Add a style tag to optimize for vertical/landscape content if needed
+      if (aspectRatio) {
+        const style = document.createElement('style');
+        style.textContent = `
+          :root {
+            --recording-width: ${width}px;
+            --recording-height: ${height}px;
+            --recording-aspect-ratio: ${aspectRatio};
+          }
+          
+          /* Add viewport-specific optimizations */
+          @media (max-width: 500px) {
+            body {
+              max-width: ${width}px;
+              width: 100%;
+              overflow-x: hidden;
+            }
+          }
+        `;
+        document.head.appendChild(style);
+      }
+    }, { 
+      width: videoWidth, 
+      height: videoHeight, 
+      aspectRatio: options.aspectRatio 
     });
     
     log('Page created with optimized settings');
     
     // Navigate to URL with better settings
-    log(`Loading page with high quality settings: ${url}`);
-    await page.goto(url, { 
+    log(`Loading page with high quality settings: ${recordingUrl}`);
+    await page.goto(recordingUrl, { 
       waitUntil: 'networkidle',
       timeout: 60000
     });
@@ -514,6 +688,31 @@ async function recordWebsite(url, duration = 10, options = {}) {
     
     // Let the page stabilize for smoother video start
     await new Promise(resolve => setTimeout(resolve, 1000));
+    
+    // For vertical videos, adjust the content to fit better
+    if (options.aspectRatio === '9:16') {
+      await page.evaluate(async () => {
+        // Add viewport-specific adjustment for vertical videos
+        const style = document.createElement('style');
+        style.textContent = `
+          body, html {
+            width: 100%;
+            max-width: 100%;
+            overflow-x: hidden;
+          }
+          .container, .main, main, .content {
+            width: 100%;
+            max-width: 100%;
+            margin-left: 0;
+            margin-right: 0;
+            padding-left: 0;
+            padding-right: 0;
+          }
+        `;
+        document.head.appendChild(style);
+      });
+      log('Added vertical video optimizations to page');
+    }
     
     // Scroll the page to ensure all content is rendered
     await page.evaluate(async () => {
@@ -635,8 +834,12 @@ async function recordWebsite(url, duration = 10, options = {}) {
       log('Enhancing video quality with ffmpeg...');
       
       try {
-        // Enhance the video quality
-        await enhanceVideoQuality(rawVideoPath, finalVideoPath, log);
+        // Enhance the video quality, passing options for aspect ratio
+        await enhanceVideoQuality(rawVideoPath, finalVideoPath, log, {
+          width: videoWidth,
+          height: videoHeight,
+          aspectRatio: options.aspectRatio
+        });
         
         if (fs.existsSync(finalVideoPath)) {
           const enhancedSize = fs.statSync(finalVideoPath).size;
@@ -751,4 +954,4 @@ function getLatestLogFile() {
   return logFiles.length > 0 ? logFiles[0] : null;
 }
 
-module.exports = { recordWebsite, getLatestLogFile };
+module.exports = { recordWebsite, getLatestLogFile, recordWithPlatformSettings };

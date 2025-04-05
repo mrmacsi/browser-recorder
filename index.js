@@ -7,7 +7,7 @@ const http = require('http');
 const https = require('https');
 
 // Get the recordWebsite function from the recorder module
-const { recordWebsite, getLatestLogFile } = recorder;
+const { recordWebsite, recordWithPlatformSettings, getLatestLogFile } = recorder;
 
 // Ensure uploads directory exists
 const uploadsDir = path.join(__dirname, 'uploads');
@@ -68,7 +68,7 @@ app.post('/api/record', async (req, res) => {
   
   try {
     // Ensure required parameters
-    const { url, duration } = req.body;
+    const { url, duration, platform, resolution, quality, fps, speed } = req.body;
     
     if (!url) {
       return res.status(400).json({ success: false, error: 'URL is required' });
@@ -81,10 +81,23 @@ app.post('/api/record', async (req, res) => {
       console.log(`Setting hardware acceleration to: ${enableHardware ? 'enabled' : 'disabled'} for this recording`);
     }
     
-    console.log(`Recording requested for URL: ${url}, duration: ${duration || 10}s`);
+    console.log(`Recording requested for URL: ${url}, duration: ${duration || 10}s, platform: ${platform || 'STANDARD_16_9'}`);
     
-    // Call the recorder with the URL and optional duration
-    const result = await recordWebsite(url, duration || 10);
+    // Use platform settings if provided, otherwise use legacy method
+    let result;
+    if (platform || resolution || quality || fps) {
+      result = await recordWithPlatformSettings(url, {
+        platform,
+        resolution,
+        duration: duration || 10,
+        quality,
+        fps,
+        speed
+      });
+    } else {
+      // Call the recorder with the URL and optional duration
+      result = await recordWebsite(url, duration || 10);
+    }
     
     if (result.error) {
       return res.status(500).json({ 
