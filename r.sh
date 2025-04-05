@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Azure VM connection details
-VM_IP="13.69.84.110"
+VM_IP="52.174.6.19"
 VM_USER="azureuser"
 PROJECT_DIR="/home/azureuser/project"
 

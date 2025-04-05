@@ -59,6 +59,8 @@ if (isLinux && !fs.existsSync('/mnt/ramdisk')) {
     // Create a 1GB RAM disk
     console.log('[DEBUG] Mounting RAM disk');
     execSync('sudo mount -t tmpfs -o size=1g tmpfs /mnt/ramdisk', { stdio: 'inherit' });
+    // Set permissions to allow the current user to write to it
+    execSync('sudo chmod 1777 /mnt/ramdisk', { stdio: 'inherit' });
     console.log('[DEBUG] RAM disk created successfully at /mnt/ramdisk');
     console.log('[DEBUG] RAM disk permissions:');
     execSync('ls -la /mnt/ramdisk', { stdio: 'inherit' });
@@ -195,16 +197,15 @@ async function generatePageActivity(page, durationMs) {
   console.log(`[DEBUG] Page activity completed with ${activityCount} mouse movements`);
 }
 
-// Find video files in the uploads directory that match our recording
-function findPlaywrightRecording(directory) {
-  console.log(`[DEBUG] Searching for recording files in ${directory}`);
+// Function to look for video files in a specified directory
+function findVideoFiles(directory) {
+  if (!fs.existsSync(directory)) {
+    return [];
+  }
+  
   try {
     // Get all files in the directory
-    const files = fs.readdirSync(directory);
-    console.log(`[DEBUG] Found ${files.length} total files in directory`);
-    
-    // Find the most recent .webm file
-    const webmFiles = files
+    const files = fs.readdirSync(directory)
       .filter(file => file.endsWith('.webm'))
       .map(file => {
         const fullPath = path.join(directory, file);
@@ -218,33 +219,10 @@ function findPlaywrightRecording(directory) {
       })
       .sort((a, b) => b.created - a.created); // Sort by most recent first
     
-    console.log(`[DEBUG] Found ${webmFiles.length} webm files`);
-    if (webmFiles.length > 0) {
-      console.log(`[DEBUG] Most recent file: ${webmFiles[0].filename}, Size: ${webmFiles[0].size} bytes, Created: ${new Date(webmFiles[0].created).toISOString()}`);
-      
-      // Clean up old temp files in development mode to manage RAM usage
-      if (useRamDisk && tempDir === os.tmpdir() && webmFiles.length > 5) {
-        console.log(`[DEBUG] Cleaning up old temp files (keeping 5 most recent)...`);
-        webmFiles.slice(5).forEach(file => {
-          try {
-            if (file.path.includes(tempDir)) {
-              fs.unlinkSync(file.path);
-              console.log(`[DEBUG] Removed old temp file: ${file.filename}`);
-            }
-          } catch (err) {
-            console.warn(`[DEBUG] Failed to remove temp file: ${err.message}`);
-          }
-        });
-      }
-      
-      return webmFiles[0];
-    }
-    
-    console.log('[DEBUG] No webm files found in uploads directory');
-    return null;
+    return files;
   } catch (error) {
-    console.error(`[DEBUG] Error finding webm files: ${error.message}`);
-    return null;
+    console.error(`[DEBUG] Error finding video files in ${directory}: ${error.message}`);
+    return [];
   }
 }
 
@@ -581,30 +559,66 @@ async function recordWebsite(url, duration = 10) {
       log(`Could not list temp directory contents: ${error.message}`);
     }
     
+    // Find any video files in temp directory if the recording path is undefined
+    let videoFilesInTemp = [];
+    if (!videoRecordingSuccessful) {
+      log(`Looking for any video files in temp directory: ${tempDir}`);
+      videoFilesInTemp = findVideoFiles(tempDir);
+      log(`Found ${videoFilesInTemp.length} video files in temp directory`);
+      
+      // If we found video files in temp directory, try to use the most recent one
+      if (videoFilesInTemp.length > 0) {
+        const recentTempVideo = videoFilesInTemp[0];
+        log(`Found recent video in temp dir: ${recentTempVideo.filename} (${recentTempVideo.size} bytes)`);
+        
+        if (recentTempVideo.size > 10000) {
+          videoRecordingSuccessful = true;
+          recordedVideoPath = recentTempVideo.path;
+          log(`Using video from temp directory: ${recordedVideoPath}`);
+        }
+      }
+    }
+    
     // If using RAM disk and video recording was successful, copy the file to uploads directory
     if (useRamDisk && videoRecordingSuccessful) {
       const destFile = path.join(uploadsDir, path.basename(recordedVideoPath));
       log(`Copying video from temp directory: ${recordedVideoPath} to ${destFile}`);
       try {
-        fs.copyFileSync(recordedVideoPath, destFile);
-        log(`File copy succeeded`);
+        // Use system commands for copying to handle permission issues
+        execSync(`sudo cp "${recordedVideoPath}" "${destFile}"`, { stdio: 'inherit' });
+        log(`File copy succeeded using system command`);
+        
+        // Set proper ownership for the copied file
+        try {
+          execSync(`sudo chmod 644 "${destFile}"`, { stdio: 'inherit' });
+          log(`Set permissions for destination file`);
+        } catch (chmodError) {
+          log(`Failed to set permissions: ${chmodError.message}`);
+        }
         
         try {
-          fs.unlinkSync(recordedVideoPath); // Remove the temp file
+          // Use system command to remove the temp file
+          execSync(`sudo rm "${recordedVideoPath}"`, { stdio: 'inherit' });
           log(`Removed temp file: ${recordedVideoPath}`);
         } catch (unlinkError) {
           log(`Failed to remove temp file: ${unlinkError.message}`);
         }
         
-        const fileSize = fs.statSync(destFile).size;
-        log(`Destination file size: ${fileSize} bytes`);
-        
-        foundVideoFile = {
-          filename: path.basename(destFile),
-          path: destFile,
-          size: fileSize
-        };
-        log(`Video copied successfully, size: ${foundVideoFile.size} bytes`);
+        // Check if the file exists and get its size
+        if (fs.existsSync(destFile)) {
+          const fileSize = fs.statSync(destFile).size;
+          log(`Destination file size: ${fileSize} bytes`);
+          
+          foundVideoFile = {
+            filename: path.basename(destFile),
+            path: destFile,
+            size: fileSize
+          };
+          log(`Video copied successfully, size: ${foundVideoFile.size} bytes`);
+        } else {
+          log(`Destination file does not exist after copy: ${destFile}`);
+          videoRecordingSuccessful = false;
+        }
       } catch (copyError) {
         log(`File copy failed: ${copyError.message}`);
         log(`Copy error stack: ${copyError.stack}`);
@@ -621,7 +635,7 @@ async function recordWebsite(url, duration = 10) {
     } else {
       // Try to find any valid recording in the uploads directory
       log(`Looking for recording in uploads directory: ${uploadsDir}`);
-      foundVideoFile = findPlaywrightRecording(uploadsDir);
+      foundVideoFile = findVideoFiles(uploadsDir)[0] || null;
     }
     
     log(`Video file found: ${foundVideoFile ? 'yes' : 'no'}`);
@@ -660,7 +674,7 @@ async function recordWebsite(url, duration = 10) {
           fs.writeFileSync(fallbackPath, "VIDEO_RECORDING_FAILED");
           log(`Created fallback placeholder: ${fallbackFilename}`);
           return { 
-            fileName: fallbackFilename,
+            fileName: videoFilename,
             logFile: path.basename(logFilePath)
           };
         } catch (fallbackError) {
