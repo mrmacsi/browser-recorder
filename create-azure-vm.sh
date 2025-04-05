@@ -23,26 +23,30 @@ echo "  7) Standard_D2s_v3 - 2 vCPU, 8 GB RAM   - Entry-level production, limite
 echo "  8) Standard_D4s_v3 - 4 vCPU, 16 GB RAM  - RECOMMENDED: Balanced performance for production"
 echo "  9) Standard_D8s_v3 - 8 vCPU, 32 GB RAM  - Multiple concurrent recording sessions"
 echo " 10) Standard_D16s_v3 - 16 vCPU, 64 GB RAM - High throughput, many concurrent sessions"
-echo "E-series (Memory Optimized):"
-echo " 11) Standard_E2s_v3 - 2 vCPU, 16 GB RAM  - Memory-intensive recording of complex sites"
-echo " 12) Standard_E4s_v3 - 4 vCPU, 32 GB RAM  - High-resolution recordings with memory demands"
-echo " 13) Standard_E8s_v3 - 8 vCPU, 64 GB RAM  - Heavy memory workloads, data processing"
 echo "F-series (Compute Optimized):"
-echo " 14) Standard_F2s_v2 - 2 vCPU, 4 GB RAM   - CPU-intensive recording, lower memory needs"
-echo " 15) Standard_F4s_v2 - 4 vCPU, 8 GB RAM   - Fast processing for CPU-bound recording"
-echo " 16) Standard_F8s_v2 - 8 vCPU, 16 GB RAM  - High-performance encoding and processing"
+echo " 11) Standard_F2s_v2 - 2 vCPU, 4 GB RAM   - CPU-intensive recording, lower memory needs"
+echo " 12) Standard_F4s_v2 - 4 vCPU, 8 GB RAM   - Fast processing for CPU-bound recording"
+echo " 13) Standard_F8s_v2 - 8 vCPU, 16 GB RAM  - High-performance encoding and processing"
+echo " 14) Standard_F16s_v2- 16 vCPU, 32 GB RAM - Maximum performance for heavy workloads"
+echo "GPU-accelerated (NV-series):"
+echo " 15) Standard_NV6    - 6 vCPU, 56 GB RAM  - NVIDIA Tesla M60 GPU for hardware acceleration"
+echo "E-series (Memory Optimized):"
+echo " 16) Standard_E2s_v3 - 2 vCPU, 16 GB RAM  - Memory-intensive recording of complex sites"
+echo " 17) Standard_E4s_v3 - 4 vCPU, 32 GB RAM  - High-resolution recordings with memory demands"
+echo " 18) Standard_E8s_v3 - 8 vCPU, 64 GB RAM  - Heavy memory workloads, data processing"
 echo ""
 echo "PRICING & PERFORMANCE NOTES:"
 echo "- B-series: 30-40% cheaper, but variable performance (CPU credits/bursting)"
 echo "- D-series: Consistent performance ideal for reliable recording services"
+echo "- F-series: Best price/performance for video processing and rendering (RECOMMENDED)"
+echo "- NV-series: Highest performance with GPU acceleration, but more expensive"
 echo "- E-series: Double the memory of D-series for complex web applications"
-echo "- F-series: Highest CPU performance for processing-intensive workloads"
 echo "- The 's' suffix indicates premium storage support for all options"
 
-read -p "Enter option number [8]: " vm_option
+read -p "Enter option number [12]: " vm_option
 
-# Set VM Size based on selection (default to 8 - Standard_D4s_v3)
-case ${vm_option:-8} in
+# Set VM Size based on selection (default to 12 - Standard_F4s_v2)
+case ${vm_option:-12} in
     1) VM_SIZE="Standard_B1s" ;;
     2) VM_SIZE="Standard_B1ms" ;;
     3) VM_SIZE="Standard_B2s" ;;
@@ -53,15 +57,17 @@ case ${vm_option:-8} in
     8) VM_SIZE="Standard_D4s_v3" ;;
     9) VM_SIZE="Standard_D8s_v3" ;;
     10) VM_SIZE="Standard_D16s_v3" ;;
-    11) VM_SIZE="Standard_E2s_v3" ;;
-    12) VM_SIZE="Standard_E4s_v3" ;;
-    13) VM_SIZE="Standard_E8s_v3" ;;
-    14) VM_SIZE="Standard_F2s_v2" ;;
-    15) VM_SIZE="Standard_F4s_v2" ;;
-    16) VM_SIZE="Standard_F8s_v2" ;;
+    11) VM_SIZE="Standard_F2s_v2" ;;
+    12) VM_SIZE="Standard_F4s_v2" ;;
+    13) VM_SIZE="Standard_F8s_v2" ;;
+    14) VM_SIZE="Standard_F16s_v2" ;;
+    15) VM_SIZE="Standard_NV6" ;;
+    16) VM_SIZE="Standard_E2s_v3" ;;
+    17) VM_SIZE="Standard_E4s_v3" ;;
+    18) VM_SIZE="Standard_E8s_v3" ;;
     *) 
-        echo "Invalid option, using default: Standard_D4s_v3"
-        VM_SIZE="Standard_D4s_v3" 
+        echo "Invalid option, using default: Standard_F4s_v2"
+        VM_SIZE="Standard_F4s_v2" 
         ;;
 esac
 
@@ -81,7 +87,8 @@ case "$VM_SIZE" in
     Standard_B2s|Standard_B2ms|Standard_D2s_v3|Standard_E2s_v3|Standard_F2s_v2) CORE_COUNT=2 ;;
     Standard_B4ms|Standard_D4s_v3|Standard_E4s_v3|Standard_F4s_v2) CORE_COUNT=4 ;;
     Standard_B8ms|Standard_D8s_v3|Standard_E8s_v3|Standard_F8s_v2) CORE_COUNT=8 ;;
-    Standard_D16s_v3) CORE_COUNT=16 ;;
+    Standard_D16s_v3|Standard_F16s_v2) CORE_COUNT=16 ;;
+    Standard_NV6) CORE_COUNT=6 ;;
     *) CORE_COUNT=4 ;;  # Default assumption
 esac
 
@@ -101,37 +108,127 @@ if (( CORE_COUNT > QUOTA_LIMIT )); then
     echo "You need at least $CORE_COUNT cores, but your limit is $QUOTA_LIMIT cores."
     echo ""
     echo "You have the following options:"
-    echo "1. Request a quota increase from Azure portal:"
-    echo "   https://aka.ms/ProdportalCRP/#blade/Microsoft_Azure_Capacity/UsageAndQuota.ReactView"
-    echo "2. Select a smaller VM size that fits within your quota."
-    echo "3. Try a different Azure region that might have higher quota."
+    echo "1. Request a quota increase from Azure portal"
+    echo "2. Try a different Azure region that might have higher quota"
+    echo "3. Select a smaller VM size that fits within your quota"
     echo ""
     
-    read -p "Would you like to continue with a smaller VM that fits your quota? (y/n): " CONTINUE_SMALLER
+    # Check quotas in other popular regions
+    echo "Checking quotas in other Azure regions..."
+    declare -a REGIONS=("eastus" "westus2" "northeurope" "southeastasia" "australiaeast" "centralus" "uksouth")
     
-    if [[ "$CONTINUE_SMALLER" == "y" || "$CONTINUE_SMALLER" == "Y" ]]; then
-        echo "Selecting the largest VM size that fits within your quota..."
-        
-        if (( QUOTA_LIMIT >= 8 )); then
-            VM_SIZE="Standard_D8s_v3"
-            echo "Selected Standard_D8s_v3 (8 vCPU, 32 GB RAM)"
-        elif (( QUOTA_LIMIT >= 4 )); then
-            VM_SIZE="Standard_D4s_v3"
-            echo "Selected Standard_D4s_v3 (4 vCPU, 16 GB RAM)"
-        elif (( QUOTA_LIMIT >= 2 )); then
-            VM_SIZE="Standard_D2s_v3"
-            echo "Selected Standard_D2s_v3 (2 vCPU, 8 GB RAM)"
-        elif (( QUOTA_LIMIT >= 1 )); then
-            VM_SIZE="Standard_B1ms"
-            echo "Selected Standard_B1ms (1 vCPU, 2 GB RAM)"
-        else
-            echo "Your quota is too low to create any VM. Please request a quota increase."
-            exit 1
+    echo "Region availability for $VM_SIZE VM:"
+    for region in "${REGIONS[@]}"; do
+        if [ "$region" != "$LOCATION" ]; then
+            region_quota=$(az vm list-usage --location "$region" --query "[?name.value=='cores']" -o tsv | awk '{print $3}')
+            if [ -n "$region_quota" ] && (( region_quota >= CORE_COUNT )); then
+                echo "✅ $region - Available! (Quota: $region_quota cores)"
+            else
+                echo "❌ $region - Not enough quota (Limit: $region_quota cores)"
+            fi
         fi
-    else
-        echo "Operation cancelled. Please request a quota increase or try a different region."
-        exit 1
-    fi
+    done
+    
+    echo ""
+    echo "Select an option:"
+    echo "1) Request a quota increase in $LOCATION (takes 1-3 business days)"
+    echo "2) Try creating VM in a different region"
+    echo "3) Choose a smaller VM size"
+    read -p "Enter your choice [1-3]: " QUOTA_CHOICE
+    
+    case $QUOTA_CHOICE in
+        1)
+            echo ""
+            echo "To request a quota increase:"
+            echo "1. Visit: https://aka.ms/ProdportalCRP/#blade/Microsoft_Azure_Capacity/UsageAndQuota.ReactView"
+            echo "2. Select your subscription"
+            echo "3. Click 'Request increase' at the top"
+            echo "4. Choose 'Compute-VM (cores-vCPU) subscription limit increases'"
+            echo "5. Select '$LOCATION' region and request at least $CORE_COUNT cores"
+            echo ""
+            echo "The approval process typically takes 1-3 business days."
+            echo "After your quota increase is approved, run this script again."
+            echo ""
+            read -p "Press Enter to exit..."
+            exit 0
+            ;;
+            
+        2)
+            echo ""
+            echo "Select a new region with sufficient quota:"
+            count=1
+            declare -a AVAILABLE_REGIONS=()
+            
+            for region in "${REGIONS[@]}"; do
+                if [ "$region" != "$LOCATION" ]; then
+                    region_quota=$(az vm list-usage --location "$region" --query "[?name.value=='cores']" -o tsv | awk '{print $3}')
+                    if [ -n "$region_quota" ] && (( region_quota >= CORE_COUNT )); then
+                        AVAILABLE_REGIONS+=("$region")
+                        echo "$count) $region (Quota: $region_quota cores)"
+                        count=$((count+1))
+                    fi
+                fi
+            done
+            
+            if [ ${#AVAILABLE_REGIONS[@]} -eq 0 ]; then
+                echo "No regions with sufficient quota found. Please request a quota increase."
+                echo "Visit: https://aka.ms/ProdportalCRP/#blade/Microsoft_Azure_Capacity/UsageAndQuota.ReactView"
+                exit 1
+            fi
+            
+            read -p "Select region number [1-$((count-1))]: " REGION_CHOICE
+            if [ "$REGION_CHOICE" -ge 1 ] && [ "$REGION_CHOICE" -lt "$count" ]; then
+                LOCATION=${AVAILABLE_REGIONS[$((REGION_CHOICE-1))]}
+                echo "Selected region: $LOCATION"
+            else
+                echo "Invalid selection. Exiting."
+                exit 1
+            fi
+            ;;
+            
+        3)
+            echo ""
+            echo "Select a VM size that fits within your quota ($QUOTA_LIMIT cores):"
+            
+            if (( QUOTA_LIMIT >= 8 )); then
+                echo "1) Standard_F8s_v2 - 8 vCPUs, 16 GB RAM - High performance computing"
+                echo "2) Standard_D8s_v3 - 8 vCPUs, 32 GB RAM - Balanced performance"
+                echo "3) Standard_NV6    - 6 vCPUs, 56 GB RAM - GPU accelerated (NVIDIA Tesla M60)"
+                read -p "Select VM size [1-3]: " SIZE_CHOICE
+                
+                case $SIZE_CHOICE in
+                    1) VM_SIZE="Standard_F8s_v2"; CORE_COUNT=8 ;;
+                    2) VM_SIZE="Standard_D8s_v3"; CORE_COUNT=8 ;;
+                    3) VM_SIZE="Standard_NV6"; CORE_COUNT=6 ;;
+                    *) VM_SIZE="Standard_F8s_v2"; CORE_COUNT=8 ;;
+                esac
+                
+            elif (( QUOTA_LIMIT >= 4 )); then
+                echo "1) Standard_F4s_v2 - 4 vCPUs, 8 GB RAM - High performance computing"
+                echo "2) Standard_D4s_v3 - 4 vCPUs, 16 GB RAM - Balanced performance"
+                read -p "Select VM size [1-2]: " SIZE_CHOICE
+                
+                case $SIZE_CHOICE in
+                    1) VM_SIZE="Standard_F4s_v2"; CORE_COUNT=4 ;;
+                    2) VM_SIZE="Standard_D4s_v3"; CORE_COUNT=4 ;;
+                    *) VM_SIZE="Standard_F4s_v2"; CORE_COUNT=4 ;;
+                esac
+                
+            else
+                echo "Your quota is too low for optimal performance. Consider requesting an increase."
+                echo "For now, we'll use the largest available size:"
+                VM_SIZE="Standard_F2s_v2"
+                CORE_COUNT=2
+            fi
+            
+            echo "Selected VM size: $VM_SIZE ($CORE_COUNT cores)"
+            ;;
+            
+        *)
+            echo "Invalid option. Exiting."
+            exit 1
+            ;;
+    esac
 fi
 
 # Create resource group if it doesn't exist
@@ -152,12 +249,23 @@ az vm create \
     --admin-username azureuser \
     --generate-ssh-keys \
     --public-ip-sku Standard \
-    --nsg-rule SSH
+    --nsg-rule SSH \
+    --storage-sku Premium_LRS \
+    --os-disk-size-gb 128 \
+    --os-disk-caching ReadWrite
 
 if [ $? -ne 0 ]; then
     echo "Failed to create VM. Exiting."
     exit 1
 fi
+
+# Configure VM for optimal performance
+echo "Configuring VM for optimal video processing performance..."
+az vm run-command invoke \
+  --resource-group "$RESOURCE_GROUP" \
+  --name "$VM_NAME" \
+  --command-id RunShellScript \
+  --scripts "sudo sysctl -w vm.swappiness=10 && echo 'vm.swappiness=10' | sudo tee -a /etc/sysctl.conf"
 
 # Get the public IP address
 PUBLIC_IP=$(az vm show -d -g "$RESOURCE_GROUP" -n "$VM_NAME" --query publicIps -o tsv)
