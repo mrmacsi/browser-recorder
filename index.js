@@ -218,15 +218,17 @@ app.delete('/api/files/:filename', (req, res) => {
   }
 });
 
-// Start the server based on environment
+// Create server based on environment
 let server;
 
 if (isDev) {
-  // In development, use HTTP
+  // Development mode - use HTTP
   console.log('Starting HTTP server in development mode');
   server = http.createServer(app);
 } else {
-  // In production, use HTTPS
+  // Production mode - use HTTPS
+  console.log('Starting HTTPS server in production mode');
+  
   try {
     // Try to read SSL certificates
     const privateKeyPath = process.env.SSL_KEY_PATH || path.join(__dirname, 'ssl', 'privkey.pem');
@@ -250,7 +252,7 @@ if (isDev) {
   }
 }
 
-// Start the server on the specified port
+// Start the server
 server.listen(PORT, () => {
   console.log(`Server running on port ${PORT} (${isDev ? 'HTTP' : 'HTTPS'})`);
 }).on('error', (err) => {
