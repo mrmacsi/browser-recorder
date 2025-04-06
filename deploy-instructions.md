@@ -84,7 +84,7 @@ For more control and potentially lower costs with high usage:
 
 ## After Deployment (Any Platform)
 
-1. **Update the frontend code** in `src/components/RecordingButton.tsx`:
+1. **Update the frontend code** in `src/components/VideoRecordingPanel.tsx`:
    ```typescript
    const apiUrl = process.env.NODE_ENV === 'production' 
      ? 'https://your-deployed-url.com/api/record'  // Update this
