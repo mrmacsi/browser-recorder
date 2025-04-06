@@ -483,6 +483,220 @@ app.get('/api/metrics', (req, res) => {
   }
 });
 
+// Add API endpoint to list all previous recording runs
+app.get('/api/recordings', async (req, res) => {
+  try {
+    // Check required directories
+    if (!fs.existsSync(uploadsDir) || !fs.existsSync(logsDir) || !fs.existsSync(metricsDir)) {
+      return res.status(404).json({
+        success: false,
+        error: 'Required directories not found'
+      });
+    }
+    
+    // Get all video files from uploads directory
+    const videoFiles = fs.readdirSync(uploadsDir)
+      .filter(file => file.endsWith('.webm'))
+      .map(file => {
+        const stats = fs.statSync(path.join(uploadsDir, file));
+        return {
+          filename: file,
+          path: path.join(uploadsDir, file),
+          size: stats.size,
+          created: stats.mtime.getTime()
+        };
+      });
+    
+    // Get all log files
+    const logFiles = fs.readdirSync(logsDir)
+      .filter(file => file.endsWith('.log') && file.startsWith('recording-'))
+      .map(file => {
+        const stats = fs.statSync(path.join(logsDir, file));
+        return {
+          filename: file,
+          path: path.join(logsDir, file),
+          size: stats.size,
+          created: stats.mtime.getTime()
+        };
+      });
+    
+    // Get all metrics files
+    const metricsFiles = fs.readdirSync(metricsDir)
+      .filter(file => file.endsWith('.log'))
+      .map(file => {
+        const stats = fs.statSync(path.join(metricsDir, file));
+        return {
+          filename: file,
+          path: path.join(metricsDir, file),
+          size: stats.size,
+          created: stats.mtime.getTime()
+        };
+      });
+    
+    // Extract session IDs and timestamps from filenames
+    const recordingSessions = [];
+    const processedIds = new Set();
+    
+    // Helper function to extract session ID from filename
+    const extractSessionId = (filename) => {
+      // Expected format: recording-SESSIONID-TIMESTAMP.log or recording-SESSIONID-TIMESTAMP.webm
+      const match = filename.match(/(?:recording|metrics)-([a-f0-9]{8})-(\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}Z)/);
+      return match ? match[1] : null;
+    };
+    
+    // Extract timestamp from filename
+    const extractTimestamp = (filename) => {
+      const match = filename.match(/(?:recording|metrics)-(?:[a-f0-9]{8})-(\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}Z)/);
+      return match ? match[1] : null;
+    };
+    
+    // Process video files first
+    for (const video of videoFiles) {
+      const sessionId = extractSessionId(video.filename);
+      if (!sessionId || processedIds.has(sessionId)) continue;
+      
+      const timestamp = extractTimestamp(video.filename);
+      if (!timestamp) continue;
+      
+      // Format the timestamp for creating a valid Date object
+      const formattedTimestamp = timestamp.replace(/-/g, ':').replace('T', ' ');
+      
+      // Find matching log file
+      const matchingLog = logFiles.find(log => log.filename.includes(sessionId));
+      // Find matching metrics file
+      const matchingMetrics = metricsFiles.find(metric => metric.filename.includes(sessionId));
+      
+      // Get log content for URL and additional info
+      let url = null;
+      let platform = 'UNKNOWN';
+      let duration = 0;
+      let resolution = 'UNKNOWN';
+      let quality = 'standard';
+      
+      if (matchingLog) {
+        try {
+          const logContent = fs.readFileSync(matchingLog.path, 'utf8');
+          // Extract URL from log
+          let urlMatch = logContent.match(/Recording requested for URL: ([^,\s]+)/);
+          if (!urlMatch) {
+            urlMatch = logContent.match(/Starting balanced recording session .+ for ([^,\s]+)/);
+          }
+          if (!urlMatch) {
+            urlMatch = logContent.match(/Loading page with high quality settings: ([^,\s]+)/);
+          }
+          if (urlMatch) url = urlMatch[1];
+          
+          // Extract platform
+          let platformMatch = logContent.match(/platform=([A-Z_0-9]+)/i);
+          if (!platformMatch) {
+            platformMatch = logContent.match(/platform: ([A-Z_0-9]+)/i);
+          }
+          if (!platformMatch) {
+            // Try to determine platform from dimensions
+            if (logContent.includes('SQUARE format')) {
+              platform = 'SQUARE';
+            } else if (logContent.includes('VERTICAL_9_16 format') || 
+                      (logContent.includes('aspect ratio') && logContent.includes('9:16'))) {
+              platform = 'VERTICAL_9_16';
+            } else if (logContent.includes('STANDARD_16_9 format') || 
+                      (logContent.includes('aspect ratio') && logContent.includes('16:9'))) {
+              platform = 'STANDARD_16_9';
+            }
+          } else {
+            platform = platformMatch[1];
+          }
+          
+          // Extract duration
+          let durationMatch = logContent.match(/duration: (\d+)s/);
+          if (!durationMatch) {
+            durationMatch = logContent.match(/Recording high quality video for (\d+) seconds/);
+          }
+          if (!durationMatch) {
+            durationMatch = logContent.match(/RECORDING_START.+DURATION=(\d+)s/);
+          }
+          if (durationMatch) duration = parseInt(durationMatch[1]);
+          
+          // Extract resolution
+          let resolutionMatch = logContent.match(/Video settings: (\d+)x(\d+)/);
+          if (!resolutionMatch) {
+            resolutionMatch = logContent.match(/size: \{ width: (\d+), height: (\d+) \}/);
+          }
+          if (!resolutionMatch) {
+            resolutionMatch = logContent.match(/viewport: \{ width: (\d+), height: (\d+) \}/);
+          }
+          if (resolutionMatch) {
+            const width = resolutionMatch[1];
+            const height = resolutionMatch[2];
+            if (width && height) {
+              resolution = `${width}x${height}`;
+            }
+          }
+          
+          // Extract additional information
+          const qualityMatch = logContent.match(/Quality profile: ([a-z]+)/i);
+          if (qualityMatch) quality = qualityMatch[1].toLowerCase();
+          
+        } catch (err) {
+          console.error(`Error reading log file ${matchingLog.path}: ${err.message}`);
+        }
+      }
+      
+      // Get host for URLs
+      const host = req.get('host');
+      const protocol = req.protocol;
+      
+      // Create recording session entry
+      recordingSessions.push({
+        sessionId,
+        timestamp: video.created ? new Date(video.created).toISOString() : new Date().toISOString(),
+        url,
+        platform,
+        duration,
+        resolution,
+        quality: quality || 'standard',
+        video: {
+          filename: video.filename,
+          url: `/uploads/${video.filename}`,
+          absoluteUrl: `${protocol}://${host}/uploads/${video.filename}`,
+          size: video.size,
+          created: new Date(video.created).toISOString()
+        },
+        log: matchingLog ? {
+          filename: matchingLog.filename,
+          url: `/api/logs/${matchingLog.filename}`,
+          size: matchingLog.size,
+          created: new Date(matchingLog.created).toISOString()
+        } : null,
+        metrics: matchingMetrics ? {
+          filename: matchingMetrics.filename,
+          url: `/api/metrics/${matchingMetrics.filename}`,
+          size: matchingMetrics.size,
+          created: new Date(matchingMetrics.created).toISOString()
+        } : null
+      });
+      
+      processedIds.add(sessionId);
+    }
+    
+    // Sort by timestamp, most recent first
+    recordingSessions.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
+    
+    // Return the results
+    res.json({
+      success: true,
+      count: recordingSessions.length,
+      recordings: recordingSessions
+    });
+  } catch (error) {
+    console.error('Error listing recordings:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Server error',
+      message: error.message
+    });
+  }
+});
+
 // Add API endpoint to get the latest frame rates from metrics
 app.get('/api/frame-rates', (req, res) => {
   try {
