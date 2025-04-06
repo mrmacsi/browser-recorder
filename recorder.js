@@ -1172,32 +1172,34 @@ async function recordMultiplePlatforms(url, platforms = [], options = {}) {
   const quality = options.quality || 'balanced';
   const fps = options.fps || VIDEO_FPS;
   
-  // Create an array of promises for each platform recording
-  const recordingPromises = platforms.map(platform => {
-    const platformOptions = { 
-      ...options, 
-      platform 
-    };
-    
-    log(`Starting recording for platform: ${platform}`);
-    return recordWithPlatformSettings(url, platformOptions)
-      .then(result => {
-        log(`Completed recording for platform: ${platform}, result: ${result.fileName || 'error'}`);
-        return { platform, result };
-      })
-      .catch(error => {
-        log(`Error recording for platform ${platform}: ${error.message}`);
-        return { platform, error: error.message };
-      });
-  });
+  // CHANGED: Instead of running platforms in parallel with Promise.all,
+  // we'll run them sequentially one after another
+  const results = [];
   
   try {
-    // Wait for all recordings to complete
-    log(`Waiting for ${platforms.length} platform recordings to complete...`);
-    const results = await Promise.all(recordingPromises);
+    // Process each platform one at a time
+    for (const platform of platforms) {
+      const platformOptions = { 
+        ...options, 
+        platform 
+      };
+      
+      log(`Starting recording for platform: ${platform}`);
+      try {
+        const result = await recordWithPlatformSettings(url, platformOptions);
+        log(`Completed recording for platform: ${platform}, result: ${result.fileName || 'error'}`);
+        results.push({ platform, result });
+      } catch (error) {
+        log(`Error recording for platform ${platform}: ${error.message}`);
+        results.push({ platform, error: error.message });
+      }
+      
+      // Add a small pause between recordings to let system resources stabilize
+      await new Promise(resolve => setTimeout(resolve, 2000));
+    }
     
-    log(`All ${platforms.length} platform recordings completed`);
-    logMetrics(`MULTI_PLATFORM_SESSION_COMPLETE,PLATFORM_COUNT=${platforms.length}`);
+    log(`All ${platforms.length} platform recordings completed sequentially`);
+    logMetrics(`MULTI_PLATFORM_SESSION_COMPLETE,PLATFORM_COUNT=${platforms.length},MODE=SEQUENTIAL`);
     
     // Format the results
     const formattedResults = results.map(({ platform, result, error }) => {
@@ -1215,7 +1217,8 @@ async function recordMultiplePlatforms(url, platforms = [], options = {}) {
         fileName: result.fileName,
         logFile: result.logFile,
         metricsFile: result.metricsFile,
-        enhanced: result.enhanced
+        enhanced: result.enhanced,
+        multiPlatformSessionId: sessionId // Add parent session ID for grouping
       };
     });
     

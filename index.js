@@ -730,6 +730,154 @@ app.get('/api/recordings', async (req, res) => {
     // Sort by timestamp, most recent first
     recordingSessions.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
     
+    // Track multi-platform sessions
+    const multiPlatformSessions = new Map();
+    
+    // Also scan for parent session logs to detect multi-platform sessions
+    console.log('Scanning for parent session logs...');
+    const parentSessionLogs = logFiles
+      .filter(file => !file.filename.includes('metrics-'))
+      .map(file => {
+        try {
+          const content = fs.readFileSync(file.path, 'utf8');
+          
+          // Check for parent session indicators
+          const isParentSession = content.includes('Starting multi-platform recording session') || 
+                                 content.includes('MULTI_PLATFORM_PARENT_SESSION');
+                                 
+          console.log(`Checking file ${file.filename}: ${isParentSession ? 'IS PARENT SESSION' : 'not parent session'}`);
+          
+          if (isParentSession) {
+            // Extract parent session ID
+            let sessionId = extractSessionId(file.filename);
+            
+            // If we couldn't get from filename, try to extract from content
+            if (!sessionId) {
+              const sessionIdMatch = content.match(/Starting multi-platform recording session ([a-f0-9]{8}) for/);
+              if (sessionIdMatch) {
+                sessionId = sessionIdMatch[1];
+              }
+              
+              // Try another pattern
+              if (!sessionId) {
+                const altSessionIdMatch = content.match(/MULTI_PLATFORM_PARENT_SESSION,ID=([a-f0-9]{8})/);
+                if (altSessionIdMatch) {
+                  sessionId = altSessionIdMatch[1];
+                }
+              }
+            }
+            
+            if (!sessionId) {
+              console.log(`  - Could not extract session ID from ${file.filename}`);
+              return null;
+            }
+            
+            console.log(`  - Found parent session ID: ${sessionId}`);
+            
+            // Extract platforms from the log
+            let platforms = [];
+            const platformsMatch = content.match(/Platforms: ([^,\n]+(?:, [^,\n]+)*)/);
+            if (!platformsMatch) {
+              // Try another pattern
+              const altPlatformsMatch = content.match(/MULTI_PLATFORM_PARENT_SESSION,ID=[a-f0-9]{8},PLATFORMS=([^,\n]+(?:,[^,\n]+)*)/);
+              if (altPlatformsMatch) {
+                platforms = altPlatformsMatch[1].split(',').map(p => p.trim());
+              }
+            } else {
+              platforms = platformsMatch[1].split(', ').map(p => p.trim());
+            }
+            console.log(`  - Found platforms: ${platforms.join(', ')}`);
+            
+            // Extract URL from the log
+            let url = null;
+            const urlMatch = content.match(/URL: ([^,\s]+)/);
+            if (urlMatch) {
+              url = urlMatch[1];
+              console.log(`  - Found URL: ${url}`);
+            }
+            
+            return {
+              sessionId,
+              filename: file.filename,
+              path: file.path,
+              platforms,
+              url
+            };
+          }
+          return null;
+        } catch (err) {
+          console.error(`Error reading file ${file.path}: ${err.message}`);
+          return null;
+        }
+      })
+      .filter(item => item !== null);
+
+    console.log(`Found ${parentSessionLogs.length} parent session logs`);
+
+    // Process parent session logs to find any missing multi-platform groups
+    parentSessionLogs.forEach(parentLog => {
+      console.log(`Processing parent session ${parentLog.sessionId}...`);
+      
+      // Skip if we already processed this session ID through multiPlatformSessions
+      if (multiPlatformSessions.has(parentLog.sessionId)) {
+        console.log(`  - Already processed through multiPlatformSessions`);
+        return;
+      }
+      
+      // Find all child recordings
+      const childRecordings = recordingSessions.filter(r => {
+        // Check if this sessionId is mentioned in the parent log as a child
+        const childSessionIdPattern = new RegExp(`result: recording-(${r.sessionId})-`, 'i');
+        return childSessionIdPattern.test(fs.readFileSync(parentLog.path, 'utf8'));
+      });
+      
+      console.log(`  - Found ${childRecordings.length} child recordings`);
+      
+      if (childRecordings.length > 0) {
+        // Sort recordings by platform to ensure consistent ordering
+        childRecordings.sort((a, b) => {
+          const platformOrder = { 'STANDARD_16_9': 1, 'SQUARE': 2, 'VERTICAL_9_16': 3 };
+          return (platformOrder[a.platform] || 999) - (platformOrder[b.platform] || 999);
+        });
+        
+        // Create a multi-platform session entry
+        recordingSessions.push({
+          sessionId: parentLog.sessionId,
+          timestamp: childRecordings[0].timestamp,
+          url: parentLog.url || childRecordings[0].url,
+          isMultiPlatform: true,
+          platformCount: childRecordings.length,
+          duration: childRecordings[0].duration,
+          parentLog: {
+            filename: parentLog.filename,
+            url: `/api/logs/${parentLog.filename}`,
+            path: parentLog.path
+          },
+          platforms: childRecordings.map(r => ({
+            platform: r.platform,
+            video: r.video,
+            log: r.log,
+            metrics: r.metrics,
+            resolution: r.resolution,
+            sessionId: r.sessionId
+          }))
+        });
+        
+        // Remove the individual recordings
+        childRecordings.forEach(r => {
+          const index = recordingSessions.findIndex(s => s.sessionId === r.sessionId);
+          if (index !== -1) {
+            console.log(`  - Removing individual recording ${r.sessionId} (now part of group)`);
+            recordingSessions.splice(index, 1);
+          }
+        });
+        
+        console.log(`  - Created multi-platform entry for session ${parentLog.sessionId}`);
+      } else {
+        console.log(`  - No child recordings found for parent ${parentLog.sessionId}`);
+      }
+    });
+    
     // Return the results
     res.json({
       success: true,
