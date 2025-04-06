@@ -53,6 +53,85 @@ curl -k https://localhost:5443/api/health
 curl -k https://localhost:5443/api/files
 ```
 
+## API Endpoints
+
+### Record a Website
+`POST /api/record`
+
+Parameters:
+- `url` (required): URL to record
+- `duration` (optional): Recording duration in seconds (default: 10)
+- `platform` (optional): Platform format (STANDARD_16_9, VERTICAL_9_16, SQUARE)
+- `resolution` (optional): Video resolution (720p, 1080p, 2k)
+
+### Multi-Platform Recording
+The `/api/record` endpoint now supports simultaneous recording for multiple platforms!
+
+Parameters:
+- `url` (required): URL to record
+- `duration` (optional): Recording duration in seconds (default: 10)
+- `platforms` (required): Array of platform formats to record simultaneously (e.g., ["STANDARD_16_9", "VERTICAL_9_16", "SQUARE"])
+- `resolution` (optional): Video resolution for all recordings (720p, 1080p, 2k)
+- `quality` (optional): Video quality (low, balanced, high)
+- `fps` (optional): Frame rate for the recording
+
+Example request:
+```json
+{
+  "url": "https://example.com",
+  "duration": 10,
+  "platforms": ["STANDARD_16_9", "VERTICAL_9_16", "SQUARE"],
+  "resolution": "1080p",
+  "quality": "balanced"
+}
+```
+
+The API will return an object with all platform recordings:
+```json
+{
+  "success": true,
+  "multiPlatform": true,
+  "sessionId": "3186b6a4",
+  "platforms": [
+    {
+      "platform": "STANDARD_16_9",
+      "success": true,
+      "fileName": "recording-abc123.webm",
+      "url": "/uploads/recording-abc123.webm",
+      "absoluteUrl": "http://example.com/uploads/recording-abc123.webm",
+      "logFile": "recording-abc123.log",
+      "logUrl": "/api/logs/recording-abc123.log"
+    },
+    {
+      "platform": "VERTICAL_9_16",
+      "success": true,
+      "fileName": "recording-def456.webm",
+      "url": "/uploads/recording-def456.webm",
+      "absoluteUrl": "http://example.com/uploads/recording-def456.webm",
+      "logFile": "recording-def456.log",
+      "logUrl": "/api/logs/recording-def456.log"
+    },
+    {
+      "platform": "SQUARE",
+      "success": true,
+      "fileName": "recording-ghi789.webm",
+      "url": "/uploads/recording-ghi789.webm",
+      "absoluteUrl": "http://example.com/uploads/recording-ghi789.webm",
+      "logFile": "recording-ghi789.log",
+      "logUrl": "/api/logs/recording-ghi789.log"
+    }
+  ],
+  "logFile": "recording-multi-session.log",
+  "logUrl": "/api/logs/recording-multi-session.log"
+}
+```
+
+### List All Files
+
+```bash
+curl -k https://localhost:5443/api/files
+```
+
 ## Development
 
 ```bash

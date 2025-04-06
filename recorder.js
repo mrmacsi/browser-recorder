@@ -1154,4 +1154,86 @@ function getLatestLogFile() {
   return logFiles.length > 0 ? logFiles[0] : null;
 }
 
-module.exports = { recordWebsite, getLatestLogFile, recordWithPlatformSettings };
+// Function to record on multiple platforms simultaneously
+async function recordMultiplePlatforms(url, platforms = [], options = {}) {
+  if (!Array.isArray(platforms) || platforms.length === 0) {
+    throw new Error('At least one platform must be specified');
+  }
+
+  const sessionId = uuidv4().substr(0, 8);
+  const { log, logMetrics, logFilePath } = createSessionLogger(sessionId);
+  
+  log(`Starting multi-platform recording session ${sessionId} for ${platforms.length} platforms`);
+  log(`URL: ${url}, Platforms: ${platforms.join(', ')}`);
+  logMetrics(`MULTI_PLATFORM_SESSION_START,ID=${sessionId},URL=${url},PLATFORM_COUNT=${platforms.length}`);
+  
+  const duration = options.duration || 10;
+  const resolution = options.resolution || '1080p';
+  const quality = options.quality || 'balanced';
+  const fps = options.fps || VIDEO_FPS;
+  
+  // Create an array of promises for each platform recording
+  const recordingPromises = platforms.map(platform => {
+    const platformOptions = { 
+      ...options, 
+      platform 
+    };
+    
+    log(`Starting recording for platform: ${platform}`);
+    return recordWithPlatformSettings(url, platformOptions)
+      .then(result => {
+        log(`Completed recording for platform: ${platform}, result: ${result.fileName || 'error'}`);
+        return { platform, result };
+      })
+      .catch(error => {
+        log(`Error recording for platform ${platform}: ${error.message}`);
+        return { platform, error: error.message };
+      });
+  });
+  
+  try {
+    // Wait for all recordings to complete
+    log(`Waiting for ${platforms.length} platform recordings to complete...`);
+    const results = await Promise.all(recordingPromises);
+    
+    log(`All ${platforms.length} platform recordings completed`);
+    logMetrics(`MULTI_PLATFORM_SESSION_COMPLETE,PLATFORM_COUNT=${platforms.length}`);
+    
+    // Format the results
+    const formattedResults = results.map(({ platform, result, error }) => {
+      if (error) {
+        return {
+          platform,
+          success: false,
+          error
+        };
+      }
+      
+      return {
+        platform,
+        success: true,
+        fileName: result.fileName,
+        logFile: result.logFile,
+        metricsFile: result.metricsFile,
+        enhanced: result.enhanced
+      };
+    });
+    
+    return {
+      sessionId,
+      platforms: formattedResults,
+      logFile: path.basename(logFilePath)
+    };
+  } catch (error) {
+    log(`Error in multi-platform recording: ${error.message}`);
+    logMetrics(`MULTI_PLATFORM_SESSION_ERROR,MESSAGE=${error.message}`);
+    
+    return {
+      sessionId,
+      error: error.message,
+      logFile: path.basename(logFilePath)
+    };
+  }
+}
+
+module.exports = { recordWebsite, getLatestLogFile, recordWithPlatformSettings, recordMultiplePlatforms };

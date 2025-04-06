@@ -7,7 +7,7 @@ const http = require('http');
 const https = require('https');
 
 // Get the recordWebsite function from the recorder module
-const { recordWebsite, recordWithPlatformSettings, getLatestLogFile } = recorder;
+const { recordWebsite, recordWithPlatformSettings, recordMultiplePlatforms, getLatestLogFile } = recorder;
 
 // Ensure uploads directory exists
 const uploadsDir = path.join(__dirname, 'uploads');
@@ -68,7 +68,7 @@ app.post('/api/record', async (req, res) => {
   
   try {
     // Ensure required parameters
-    const { url, duration, platform, resolution, quality, fps, speed } = req.body;
+    const { url, duration, platform, platforms, resolution, quality, fps, speed } = req.body;
     
     if (!url) {
       return res.status(400).json({ success: false, error: 'URL is required' });
@@ -81,7 +81,56 @@ app.post('/api/record', async (req, res) => {
       console.log(`Setting hardware acceleration to: ${enableHardware ? 'enabled' : 'disabled'} for this recording`);
     }
     
-    console.log(`Recording requested for URL: ${url}, duration: ${duration || 10}s, platform: ${platform || 'STANDARD_16_9'}`);
+    console.log(`Recording requested for URL: ${url}, duration: ${duration || 10}s`);
+    
+    // Handle multiple platforms if provided
+    if (platforms && Array.isArray(platforms) && platforms.length > 0) {
+      console.log(`Multi-platform recording requested: ${platforms.join(', ')}`);
+      
+      const result = await recordMultiplePlatforms(url, platforms, {
+        resolution,
+        duration: duration || 10,
+        quality,
+        fps,
+        speed
+      });
+      
+      if (result.error) {
+        return res.status(500).json({
+          success: false,
+          error: result.error,
+          logFile: result.logFile,
+          logUrl: `/api/logs/${result.logFile}`
+        });
+      }
+      
+      // Get the host from request
+      const host = req.get('host');
+      const protocol = req.protocol;
+      
+      // Enhance the platform results with URLs
+      const enhancedResults = result.platforms.map(platform => {
+        if (!platform.success) return platform;
+        
+        return {
+          ...platform,
+          url: `/uploads/${platform.fileName}`,
+          absoluteUrl: `${protocol}://${host}/uploads/${platform.fileName}`,
+          logUrl: `/api/logs/${platform.logFile}`,
+          metricsUrl: `/api/metrics/${platform.metricsFile}`
+        };
+      });
+      
+      // Return the multi-platform results
+      return res.json({
+        success: true,
+        multiPlatform: true,
+        sessionId: result.sessionId,
+        platforms: enhancedResults,
+        logFile: result.logFile,
+        logUrl: `/api/logs/${result.logFile}`
+      });
+    }
     
     // Use platform settings if provided, otherwise use legacy method
     let result;
