@@ -132,6 +132,34 @@ The API will return an object with all platform recordings:
 curl -k https://localhost:5443/api/files
 ```
 
+### Delete a Specific Recording
+`DELETE /api/recordings/:sessionId`
+
+Deletes all files (video, log, metrics) associated with a specific recording session ID.
+
+### Delete All Recordings
+`DELETE /api/recordings`
+
+Deletes all recording files from the system, including all videos, logs, and metrics files.
+
+Example response:
+```json
+{
+  "success": true,
+  "message": "Deleted 211 files across all recording sessions",
+  "deleted": {
+    "count": 211,
+    "videoCount": 40,
+    "logCount": 96,
+    "metricsCount": 75
+  },
+  "failed": {
+    "count": 0,
+    "files": []
+  }
+}
+```
+
 ## Development
 
 ```bash

@@ -893,6 +893,83 @@ app.delete('/api/recordings/:sessionId', (req, res) => {
   }
 });
 
+// Add API endpoint to delete all recordings
+app.delete('/api/recordings', (req, res) => {
+  try {
+    console.log('Attempting to delete all recording sessions');
+    
+    // Find all files in all directories
+    const videoFiles = fs.existsSync(uploadsDir) ? 
+      fs.readdirSync(uploadsDir)
+        .filter(file => file.endsWith('.webm'))
+        .map(file => path.join(uploadsDir, file)) : [];
+      
+    const logFiles = fs.existsSync(logsDir) ?
+      fs.readdirSync(logsDir)
+        .filter(file => file.endsWith('.log') && file.startsWith('recording-'))
+        .map(file => path.join(logsDir, file)) : [];
+      
+    const metricsFiles = fs.existsSync(metricsDir) ?
+      fs.readdirSync(metricsDir)
+        .filter(file => file.endsWith('.log'))
+        .map(file => path.join(metricsDir, file)) : [];
+    
+    // Combine all files
+    const allFiles = [...videoFiles, ...logFiles, ...metricsFiles];
+    
+    if (allFiles.length === 0) {
+      return res.status(404).json({
+        success: false,
+        error: 'No files found',
+        message: 'No recording files found to delete'
+      });
+    }
+    
+    // Delete all files
+    const deletedFiles = [];
+    const failedFiles = [];
+    
+    allFiles.forEach(filePath => {
+      try {
+        const fileName = path.basename(filePath);
+        fs.unlinkSync(filePath);
+        deletedFiles.push(fileName);
+        console.log(`Deleted file: ${fileName}`);
+      } catch (err) {
+        failedFiles.push({
+          path: filePath,
+          error: err.message
+        });
+        console.error(`Failed to delete file ${filePath}: ${err.message}`);
+      }
+    });
+    
+    // Return the results
+    res.json({
+      success: true,
+      message: `Deleted ${deletedFiles.length} files across all recording sessions`,
+      deleted: {
+        count: deletedFiles.length,
+        videoCount: videoFiles.length,
+        logCount: logFiles.length,
+        metricsCount: metricsFiles.length
+      },
+      failed: {
+        count: failedFiles.length,
+        files: failedFiles
+      }
+    });
+    
+  } catch (error) {
+    console.error(`Error deleting all sessions: ${error.message}`);
+    res.status(500).json({
+      success: false,
+      error: 'Server error',
+      message: error.message
+    });
+  }
+});
+
 // Create server based on environment
 let server;
 
