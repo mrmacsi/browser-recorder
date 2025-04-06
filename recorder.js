@@ -500,7 +500,7 @@ async function recordWithPlatformSettings(url, options = {}) {
   console.log(`Recording with ${platform} format (${adjustedWidth}x${height}) at ${resolution} resolution`);
 
   // Record with specified dimensions and enforce aspect ratio
-  return await recordWebsite(url, duration, {
+  const result = await recordWebsite(url, duration, {
     width: adjustedWidth,
     height,
     fps,
@@ -508,6 +508,18 @@ async function recordWithPlatformSettings(url, options = {}) {
     platform,
     aspectRatio: DIMENSIONS[platform].aspect
   });
+  
+  // Ensure metadata is consistently returned
+  return {
+    ...result,
+    width: adjustedWidth,
+    height,
+    fps,
+    resolution,
+    platform,
+    aspectRatio: DIMENSIONS[platform].aspect,
+    duration
+  };
 }
 
 // Record a website with balanced quality
@@ -523,6 +535,7 @@ async function recordWebsite(url, duration = 10, options = {}) {
   const fastMode = options.fastMode !== undefined ? options.fastMode : true; // Default to fast mode
   const quality = options.quality || 'balanced'; // 'low', 'balanced', 'high'
   const platform = options.platform || null;
+  const aspectRatio = options.aspectRatio || null;
   
   // Add platform parameter to URL if it's not already there and platform is specified
   let recordingUrl = url;
@@ -956,7 +969,15 @@ async function recordWebsite(url, duration = 10, options = {}) {
             fileName: path.basename(finalVideoPath),
             logFile: path.basename(logFilePath),
             metricsFile: path.basename(metricsFilePath),
-            enhanced: true
+            enhanced: true,
+            width: videoWidth,
+            height: videoHeight,
+            fps: videoFps,
+            duration: duration,
+            quality: quality,
+            platform: platform,
+            aspectRatio: options.aspectRatio,
+            size: enhancedSize
           };
         } else {
           log('Failed to create enhanced video, falling back to original');
@@ -969,7 +990,15 @@ async function recordWebsite(url, duration = 10, options = {}) {
             fileName: path.basename(finalVideoPath),
             logFile: path.basename(logFilePath),
             metricsFile: path.basename(metricsFilePath),
-            enhanced: false
+            enhanced: false,
+            width: videoWidth,
+            height: videoHeight,
+            fps: videoFps,
+            duration: duration,
+            quality: quality,
+            platform: platform,
+            aspectRatio: options.aspectRatio,
+            size: fs.existsSync(finalVideoPath) ? fs.statSync(finalVideoPath).size : 0
           };
         }
       } catch (enhanceError) {
@@ -984,7 +1013,15 @@ async function recordWebsite(url, duration = 10, options = {}) {
           logFile: path.basename(logFilePath),
           metricsFile: path.basename(metricsFilePath),
           enhanced: false,
-          enhanceError: enhanceError.message
+          enhanceError: enhanceError.message,
+          width: videoWidth,
+          height: videoHeight,
+          fps: videoFps,
+          duration: duration,
+          quality: quality,
+          platform: platform,
+          aspectRatio: options.aspectRatio,
+          size: fs.existsSync(finalVideoPath) ? fs.statSync(finalVideoPath).size : 0
         };
       }
     } else {
@@ -1211,15 +1248,29 @@ async function recordMultiplePlatforms(url, platforms = [], options = {}) {
         };
       }
       
-      return {
+      const formattedResult = {
         platform,
         success: true,
         fileName: result.fileName,
         logFile: result.logFile,
         metricsFile: result.metricsFile,
         enhanced: result.enhanced,
+        width: result.width,
+        height: result.height,
+        fps: result.fps,
+        duration: result.duration,
+        quality: result.quality,
+        aspectRatio: result.aspectRatio,
+        size: result.size,
         multiPlatformSessionId: sessionId // Add parent session ID for grouping
       };
+      
+      // Add enhanceError if present
+      if (result.enhanceError) {
+        formattedResult.enhanceError = result.enhanceError;
+      }
+      
+      return formattedResult;
     });
     
     return {
