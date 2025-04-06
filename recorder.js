@@ -7,8 +7,8 @@ const { execSync, spawn } = require('child_process');
 
 // Balanced video configuration for speed and quality
 const VIDEO_FPS = 60;
-const VIDEO_WIDTH = 2560;  // 2K resolution (faster than 4K)
-const VIDEO_HEIGHT = 1440;
+const VIDEO_WIDTH = 1920;  // Full HD standard
+const VIDEO_HEIGHT = 1080;
 const VIDEO_BITRATE = '12M';  // 12 Mbps for good quality
 const FFMPEG_PATH = process.env.FFMPEG_PATH || 'ffmpeg';
 const USE_HARDWARE_ACCELERATION = true;
@@ -457,18 +457,19 @@ async function enhanceVideoQuality(inputPath, outputPath, logger, videoOptions =
   });
 }
 
-// Platform dimension presets
+// Platform dimension presets with industry standard resolutions
 const DIMENSIONS = {
-  SQUARE: { aspect: '1:1', width: { '720p': 720, '1080p': 1080, '2k': 1440 }, height: { '720p': 720, '1080p': 1080, '2k': 1440 } },
-  VERTICAL_9_16: { aspect: '9:16', width: { '720p': 405, '1080p': 607, '2k': 810 }, height: { '720p': 720, '1080p': 1080, '2k': 1440 } },
-  STANDARD_16_9: { aspect: '16:9', width: { '720p': 1280, '1080p': 1920, '2k': 2560 }, height: { '720p': 720, '1080p': 1080, '2k': 1440 } }
+  SQUARE: { aspect: '1:1', width: { '720p': 720, '1080p': 1080, '1440p': 1440, '2160p': 2160 }, height: { '720p': 720, '1080p': 1080, '1440p': 1440, '2160p': 2160 } },
+  VERTICAL_9_16: { aspect: '9:16', width: { '720p': 405, '1080p': 608, '1440p': 810, '2160p': 1215 }, height: { '720p': 720, '1080p': 1080, '1440p': 1440, '2160p': 2160 } },
+  STANDARD_16_9: { aspect: '16:9', width: { '720p': 1280, '1080p': 1920, '1440p': 2560, '2160p': 3840 }, height: { '720p': 720, '1080p': 1080, '1440p': 1440, '2160p': 2160 } }
 };
 
 // Resolution presets (using 16:9 as reference)
 const RESOLUTIONS = {
-  '720p': { width: 1280, height: 720 },
-  '1080p': { width: 1920, height: 1080 },
-  '2k': { width: 2560, height: 1440 }
+  '720p': { width: 1280, height: 720 },    // HD
+  '1080p': { width: 1920, height: 1080 },  // Full HD
+  '1440p': { width: 2560, height: 1440 },  // QHD (2K)
+  '2160p': { width: 3840, height: 2160 }   // UHD (4K)
 };
 
 // API endpoint for recording with platform dimensions
@@ -487,7 +488,7 @@ async function recordWithPlatformSettings(url, options = {}) {
 
   // Validate resolution
   if (!RESOLUTIONS[resolution]) {
-    throw new Error(`Invalid resolution: ${resolution}. Supported resolutions: 720p, 1080p, 2k`);
+    throw new Error(`Invalid resolution: ${resolution}. Supported resolutions: 720p, 1080p, 1440p, 2160p`);
   }
 
   // Get dimensions from presets
