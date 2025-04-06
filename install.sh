@@ -98,6 +98,70 @@ sudo chmod 1777 /mnt/ramdisk
 # Make RAM disk mount persistent with proper permissions
 echo "tmpfs /mnt/ramdisk tmpfs size=2G,mode=1777 0 0" | sudo tee -a /etc/fstab
 
+# Set up the recorder-specific RAM disk for Ubuntu Server
+echo "Setting up dedicated RAM disk for the browser recorder..."
+RECORDER_RAMDISK_PATH="/mnt/recorder_ramdisk"
+
+# Create the mount point if it doesn't exist
+if [ ! -d "$RECORDER_RAMDISK_PATH" ]; then
+  echo "Creating mount point at $RECORDER_RAMDISK_PATH"
+  sudo mkdir -p "$RECORDER_RAMDISK_PATH"
+else
+  echo "Mount point already exists at $RECORDER_RAMDISK_PATH"
+  
+  # Check if already mounted, and unmount it first
+  if mount | grep -q "$RECORDER_RAMDISK_PATH"; then
+    echo "Unmounting existing RAM disk at $RECORDER_RAMDISK_PATH"
+    sudo umount "$RECORDER_RAMDISK_PATH"
+  fi
+fi
+
+# Add to /etc/fstab if not already present
+if ! grep -q "$RECORDER_RAMDISK_PATH" /etc/fstab; then
+  echo "Adding RAM disk entry to /etc/fstab"
+  echo "tmpfs $RECORDER_RAMDISK_PATH tmpfs rw,size=2G,mode=1777 0 0" | sudo tee -a /etc/fstab
+  echo "Entry added to /etc/fstab"
+else
+  echo "RAM disk entry already exists in /etc/fstab"
+fi
+
+# Mount the RAM disk
+echo "Mounting recorder RAM disk..."
+sudo mount "$RECORDER_RAMDISK_PATH"
+
+# Set permissions
+sudo chmod 1777 "$RECORDER_RAMDISK_PATH"
+echo "Set permissions to 1777 (rwxrwxrwt)"
+
+# Create a systemd service to clean the RAM disk
+echo "Creating RAM disk monitoring and cleanup service..."
+
+# Create the service file
+cat > /tmp/ramdisk-monitor.service << EOF
+[Unit]
+Description=Monitor and clean browser recorder RAM disk
+After=local-fs.target
+
+[Service]
+Type=simple
+ExecStart=/bin/bash -c 'while true; do find $RECORDER_RAMDISK_PATH -type f -mmin +60 -delete; sleep 3600; done'
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+# Move the service file to the systemd directory
+sudo mv /tmp/ramdisk-monitor.service /etc/systemd/system/
+
+# Enable and start the service
+sudo systemctl daemon-reload
+sudo systemctl enable ramdisk-monitor
+sudo systemctl start ramdisk-monitor
+
+echo "Recorder RAM disk setup complete with auto-cleanup service"
+
 # Ensure uploads and logs directories exist with proper permissions
 echo "Setting up uploads and logs directories with proper permissions..."
 sudo mkdir -p ${REPO_DIR}/uploads ${REPO_DIR}/logs

@@ -40,16 +40,281 @@ const tempVideoDir = path.resolve(__dirname, 'temp_videos');
 // Determine optimal temp directory with improved memory management
 const isAzureVM = fs.existsSync('/mnt/resource');
 const ramDiskExists = fs.existsSync('/mnt/ramdisk');
+const macOSRamDisk = path.join(os.tmpdir(), 'recorder_ramdisk');
+const ubuntuRamDisk = '/mnt/recorder_ramdisk';
 const azureTempDir = '/mnt/resource/browser-recorder/temp';
+
+// Detect if running on Ubuntu
+function isUbuntu() {
+  try {
+    if (os.platform() !== 'linux') return false;
+    
+    // Check for Ubuntu-specific files
+    if (fs.existsSync('/etc/lsb-release')) {
+      const releaseInfo = fs.readFileSync('/etc/lsb-release', 'utf8');
+      return releaseInfo.toLowerCase().includes('ubuntu');
+    }
+    
+    return false;
+  } catch (error) {
+    console.error(`Error detecting Ubuntu: ${error.message}`);
+    return false;
+  }
+}
+
+// Create RAM disk on Ubuntu if possible
+function setupUbuntuRamDisk(size = '2G') {
+  try {
+    // Check if we're on Ubuntu
+    if (!isUbuntu()) return null;
+    
+    console.log('Detected Ubuntu system, setting up RAM disk...');
+    
+    // Check if RAM disk already exists
+    if (fs.existsSync(ubuntuRamDisk) && isRamDiskMounted(ubuntuRamDisk)) {
+      console.log(`Ubuntu RAM disk already exists at ${ubuntuRamDisk}`);
+      
+      // Ensure correct permissions
+      try {
+        const result = execSync(`sudo chmod 777 ${ubuntuRamDisk} 2>&1`).toString();
+        console.log(`Set permissions on existing RAM disk: ${result.trim() || 'Success'}`);
+      } catch (permError) {
+        console.log(`Warning: Could not set permissions on ${ubuntuRamDisk}: ${permError.message}`);
+      }
+      
+      return ubuntuRamDisk;
+    }
+    
+    // Create the directory if it doesn't exist
+    if (!fs.existsSync(ubuntuRamDisk)) {
+      try {
+        execSync(`sudo mkdir -p ${ubuntuRamDisk} 2>&1`);
+        console.log(`Created Ubuntu RAM disk directory at ${ubuntuRamDisk}`);
+      } catch (mkdirError) {
+        console.error(`Error creating RAM disk directory: ${mkdirError.message}`);
+        return null;
+      }
+    }
+    
+    // Mount the RAM disk
+    try {
+      const mountResult = execSync(`sudo mount -t tmpfs -o size=${size} tmpfs ${ubuntuRamDisk} 2>&1`).toString();
+      console.log(`Mounted RAM disk: ${mountResult.trim() || 'Success'}`);
+      
+      // Set permissions
+      execSync(`sudo chmod 777 ${ubuntuRamDisk} 2>&1`);
+      
+      console.log(`Ubuntu RAM disk created successfully at ${ubuntuRamDisk} with size ${size}`);
+      return ubuntuRamDisk;
+    } catch (mountError) {
+      console.error(`Error mounting RAM disk: ${mountError.message}`);
+      return null;
+    }
+  } catch (error) {
+    console.error(`Error setting up Ubuntu RAM disk: ${error.message}`);
+    return null;
+  }
+}
+
+// Check if a path is mounted as a RAM disk
+function isRamDiskMounted(mountPath) {
+  try {
+    if (os.platform() !== 'linux') return false;
+    
+    const mountInfo = execSync('mount').toString();
+    return mountInfo.includes(`tmpfs on ${mountPath}`);
+  } catch (error) {
+    console.error(`Error checking if RAM disk is mounted: ${error.message}`);
+    return false;
+  }
+}
+
+// Unmount Ubuntu RAM disk
+function unmountUbuntuRamDisk(logger = console.log) {
+  if (!isUbuntu() || !isRamDiskMounted(ubuntuRamDisk)) return false;
+  
+  try {
+    logger(`Unmounting Ubuntu RAM disk at ${ubuntuRamDisk}...`);
+    execSync(`sudo umount ${ubuntuRamDisk} 2>&1`);
+    logger('RAM disk unmounted successfully');
+    return true;
+  } catch (error) {
+    logger(`Error unmounting RAM disk: ${error.message}`);
+    return false;
+  }
+}
+
+// Create RAM disk on macOS if possible
+function setupMacOSRamDisk() {
+  try {
+    // Check if on macOS
+    if (os.platform() === 'darwin') {
+      if (!fs.existsSync(macOSRamDisk)) {
+        fs.mkdirSync(macOSRamDisk, { recursive: true });
+        console.log(`Created macOS RAM disk directory at ${macOSRamDisk}`);
+      }
+      
+      // Set permissions
+      try {
+        fs.chmodSync(macOSRamDisk, 0o777);
+      } catch (err) {
+        console.log(`Warning: Could not set permissions on ${macOSRamDisk}: ${err.message}`);
+      }
+      
+      return macOSRamDisk;
+    }
+    return null;
+  } catch (error) {
+    console.error(`Error creating macOS RAM disk: ${error.message}`);
+    return null;
+  }
+}
+
+// Cleanup macOS RAM disk completely
+function cleanupMacOSRamDisk(logger = console.log) {
+  if (os.platform() === 'darwin' && tempDir === macOSRamDisk && fs.existsSync(macOSRamDisk)) {
+    try {
+      logger(`Performing complete cleanup of macOS RAM disk at ${macOSRamDisk}`);
+      
+      // Read directory contents
+      const items = fs.readdirSync(macOSRamDisk);
+      
+      // Track cleanup stats for logging
+      let deletedFiles = 0;
+      let deletedDirs = 0;
+      let errors = 0;
+      
+      // Helper function for recursive deletion
+      const deleteItem = (itemPath) => {
+        try {
+          const stats = fs.statSync(itemPath);
+          
+          if (stats.isDirectory()) {
+            // Recursively clean subdirectories
+            const subItems = fs.readdirSync(itemPath);
+            subItems.forEach(subItem => {
+              deleteItem(path.join(itemPath, subItem));
+            });
+            
+            // Delete the directory itself
+            fs.rmdirSync(itemPath);
+            deletedDirs++;
+            
+          } else {
+            // Delete files
+            fs.unlinkSync(itemPath);
+            deletedFiles++;
+          }
+        } catch (err) {
+          logger(`Error cleaning up item ${itemPath}: ${err.message}`);
+          errors++;
+        }
+      };
+      
+      // Process all items in the RAM disk
+      items.forEach(item => {
+        deleteItem(path.join(macOSRamDisk, item));
+      });
+      
+      logger(`RAM disk cleanup complete: deleted ${deletedFiles} files and ${deletedDirs} directories with ${errors} errors`);
+      
+      // Don't delete the RAM disk root itself as it may be reused
+      // But ensure it's empty
+      return true;
+    } catch (error) {
+      logger(`Error during RAM disk cleanup: ${error.message}`);
+      return false;
+    }
+  }
+  return false;
+}
+
+// Cleanup Ubuntu RAM disk completely
+function cleanupUbuntuRamDisk(logger = console.log) {
+  if (isUbuntu() && tempDir === ubuntuRamDisk && fs.existsSync(ubuntuRamDisk)) {
+    try {
+      logger(`Performing complete cleanup of Ubuntu RAM disk at ${ubuntuRamDisk}`);
+      
+      // Read directory contents
+      const items = fs.readdirSync(ubuntuRamDisk);
+      
+      // Track cleanup stats for logging
+      let deletedFiles = 0;
+      let deletedDirs = 0;
+      let errors = 0;
+      
+      // Helper function for recursive deletion
+      const deleteItem = (itemPath) => {
+        try {
+          const stats = fs.statSync(itemPath);
+          
+          if (stats.isDirectory()) {
+            // Recursively clean subdirectories
+            const subItems = fs.readdirSync(itemPath);
+            subItems.forEach(subItem => {
+              deleteItem(path.join(itemPath, subItem));
+            });
+            
+            // Delete the directory itself
+            fs.rmdirSync(itemPath);
+            deletedDirs++;
+            
+          } else {
+            // Delete files
+            fs.unlinkSync(itemPath);
+            deletedFiles++;
+          }
+        } catch (err) {
+          logger(`Error cleaning up item ${itemPath}: ${err.message}`);
+          errors++;
+        }
+      };
+      
+      // Process all items in the RAM disk
+      items.forEach(item => {
+        deleteItem(path.join(ubuntuRamDisk, item));
+      });
+      
+      logger(`Ubuntu RAM disk cleanup complete: deleted ${deletedFiles} files and ${deletedDirs} directories with ${errors} errors`);
+      
+      return true;
+    } catch (error) {
+      logger(`Error during Ubuntu RAM disk cleanup: ${error.message}`);
+      return false;
+    }
+  }
+  return false;
+}
 
 // Choose the best temp directory available
 let tempDir;
 if (isAzureVM && fs.existsSync(azureTempDir)) {
   tempDir = azureTempDir;
+  console.log(`Using Azure VM temp directory: ${tempDir}`);
 } else if (ramDiskExists) {
   tempDir = '/mnt/ramdisk';
+  console.log(`Using existing RAM disk: ${tempDir}`);
+} else if (isUbuntu()) {
+  const ubuntuRamDir = setupUbuntuRamDisk('2G');
+  if (ubuntuRamDir) {
+    tempDir = ubuntuRamDir;
+    console.log(`Using Ubuntu RAM disk: ${tempDir}`);
+  } else {
+    tempDir = tempVideoDir;
+    console.log(`Falling back to regular temp directory: ${tempDir}`);
+  }
+} else if (os.platform() === 'darwin') {
+  const macRamDir = setupMacOSRamDisk();
+  if (macRamDir) {
+    tempDir = macRamDir;
+    console.log(`Using macOS RAM disk: ${tempDir}`);
+  } else {
+    tempDir = tempVideoDir;
+    console.log(`Falling back to regular temp directory: ${tempDir}`);
+  }
 } else {
   tempDir = tempVideoDir; // Use our dedicated temp directory
+  console.log(`Using default temp directory: ${tempDir}`);
 }
 
 // Enhanced logger for monitoring recording performance
@@ -94,177 +359,6 @@ async function enhanceVideoQuality(inputPath, outputPath, logger, videoOptions =
     
     const passLogPath = path.join(passLogDir, `pass-${uuidv4().substr(0, 8)}`);
     
-    // Two-pass encoding function
-    const twoPassEncode = async () => {
-      // First pass
-      logger(`Starting first pass encoding...`);
-      const firstPassArgs = [
-        '-y',
-        '-i', inputPath,
-        '-c:v', CODEC,
-        '-b:v', VIDEO_BITRATE,
-        '-pass', '1',
-        '-passlogfile', passLogPath,
-        '-deadline', 'good',
-        '-cpu-used', '0',
-        '-threads', THREAD_COUNT.toString(),
-        '-frame-parallel', '1',
-        '-tile-columns', '2',
-        '-tile-rows', '2',
-        '-auto-alt-ref', '1',
-        '-lag-in-frames', '25',
-        '-pix_fmt', 'yuv420p',
-        '-r', `${VIDEO_FPS}`,
-        '-an',  // No audio for first pass
-        '-f', 'null',  // Output to null
-        '/dev/null'
-      ];
-      
-      // Add duration trimming if specified
-      if (videoOptions.duration) {
-        firstPassArgs.splice(2, 0, '-t', videoOptions.duration.toString());
-        logger(`Applying duration limit: ${videoOptions.duration} seconds`);
-      }
-      
-      if (os.platform() === 'win32') {
-        firstPassArgs[firstPassArgs.length - 1] = 'NUL';
-      }
-      
-      logger(`Running first pass with args: ${firstPassArgs.join(' ')}`);
-      
-      try {
-        await new Promise((resolvePass, rejectPass) => {
-          const firstPassProcess = spawn(FFMPEG_PATH, firstPassArgs);
-          
-          firstPassProcess.stdout.on('data', (data) => {
-            logger(`ffmpeg first pass stdout: ${data}`);
-          });
-          
-          firstPassProcess.stderr.on('data', (data) => {
-            // This is where progress info is output
-            const dataStr = data.toString();
-            if (dataStr.includes('frame=')) {
-              // Progress info
-              const progressMatch = dataStr.match(/frame=\s*(\d+)/);
-              if (progressMatch) {
-                logger(`First pass progress: frame ${progressMatch[1]}`);
-              }
-            }
-          });
-          
-          firstPassProcess.on('close', (code) => {
-            if (code === 0) {
-              logger(`First pass completed successfully`);
-              resolvePass();
-            } else {
-              logger(`First pass exited with code ${code}`);
-              rejectPass(new Error(`First pass encoding failed with code ${code}`));
-            }
-          });
-          
-          firstPassProcess.on('error', (err) => {
-            logger(`First pass error: ${err.message}`);
-            rejectPass(err);
-          });
-        });
-        
-        // Second pass (with enhanced quality settings)
-        logger(`Starting second pass encoding...`);
-        const secondPassArgs = [
-          '-y',
-          '-i', inputPath,
-          '-c:v', CODEC,
-          '-b:v', VIDEO_BITRATE,
-          '-maxrate', `${parseInt(VIDEO_BITRATE) * 1.5}`,
-          '-minrate', VIDEO_BITRATE,
-          '-pass', '2',
-          '-passlogfile', passLogPath,
-          '-deadline', QUALITY_PRESET,
-          '-cpu-used', '0',  // Best quality
-          '-threads', THREAD_COUNT.toString(),
-          '-frame-parallel', '1',
-          '-tile-columns', '2',
-          '-tile-rows', '2',
-          '-auto-alt-ref', '1',
-          '-lag-in-frames', '25',
-          '-pix_fmt', 'yuv444p', // Better color quality
-          '-r', `${VIDEO_FPS}`,
-          '-vf', 'scale=out_color_matrix=bt709,unsharp=5:5:1.0:5:5:0.0', // Sharpen filter
-          '-color_primaries', 'bt709',
-          '-color_trc', 'bt709',
-          '-colorspace', 'bt709',
-          '-movflags', '+faststart',
-          '-c:a', 'libopus', // High quality audio codec
-          '-b:a', '192k',
-          outputPath
-        ];
-        
-        // Add duration trimming if specified
-        if (videoOptions.duration) {
-          secondPassArgs.splice(2, 0, '-t', videoOptions.duration.toString());
-        }
-        
-        logger(`Running second pass with args: ${secondPassArgs.join(' ')}`);
-        
-        await new Promise((resolvePass, rejectPass) => {
-          const secondPassProcess = spawn(FFMPEG_PATH, secondPassArgs);
-          
-          secondPassProcess.stdout.on('data', (data) => {
-            logger(`ffmpeg second pass stdout: ${data}`);
-          });
-          
-          secondPassProcess.stderr.on('data', (data) => {
-            // This is where progress info is output
-            const dataStr = data.toString();
-            if (dataStr.includes('frame=')) {
-              // Progress info
-              const progressMatch = dataStr.match(/frame=\s*(\d+)/);
-              if (progressMatch) {
-                logger(`Second pass progress: frame ${progressMatch[1]}`);
-              }
-            }
-          });
-          
-          secondPassProcess.on('close', (code) => {
-            if (code === 0) {
-              logger(`Second pass completed successfully: ${outputPath}`);
-              resolvePass();
-            } else {
-              logger(`Second pass exited with code ${code}`);
-              rejectPass(new Error(`Second pass encoding failed with code ${code}`));
-            }
-          });
-          
-          secondPassProcess.on('error', (err) => {
-            logger(`Second pass error: ${err.message}`);
-            rejectPass(err);
-          });
-        });
-        
-        // Cleanup pass log files
-        try {
-          const logPattern = new RegExp(`^${path.basename(passLogPath)}`);
-          const passFiles = fs.readdirSync(passLogDir)
-            .filter(file => logPattern.test(file))
-            .map(file => path.join(passLogDir, file));
-          
-          passFiles.forEach(file => {
-            fs.unlinkSync(file);
-            logger(`Removed pass log file: ${file}`);
-          });
-        } catch (cleanupErr) {
-          logger(`Warning: Failed to clean up pass log files: ${cleanupErr.message}`);
-        }
-        
-        logger(`Two-pass encoding completed successfully`);
-        return outputPath;
-        
-      } catch (error) {
-        logger(`Two-pass encoding failed: ${error.message}`);
-        throw error;
-      }
-    };
-    
     // Single-pass encoding as fallback
     const singlePassEncode = async () => {
       logger(`Starting single-pass encoding...`);
@@ -306,6 +400,10 @@ async function enhanceVideoQuality(inputPath, outputPath, logger, videoOptions =
         } else {
           ffmpegArgs.push('-vf', 'scale=out_color_matrix=bt709');
         }
+        
+        // Add memory optimization options
+        ffmpegArgs.push('-max_muxing_queue_size', '9999');
+        ffmpegArgs.push('-avoid_negative_ts', '1');
         
         // Add remaining arguments
         ffmpegArgs.push(
@@ -349,20 +447,8 @@ async function enhanceVideoQuality(inputPath, outputPath, logger, videoOptions =
     // Execute encoding with preferences
     (async () => {
       try {
-        if (TWO_PASS_ENCODING) {
-          try {
-            await twoPassEncode();
-            logger(`Two-pass encoding successful`);
-            resolve(outputPath);
-          } catch (twoPassErr) {
-            logger(`Two-pass encoding failed, falling back to single-pass: ${twoPassErr.message}`);
-            await singlePassEncode();
-            resolve(outputPath);
-          }
-        } else {
-          await singlePassEncode();
-          resolve(outputPath);
-        }
+        await singlePassEncode();
+        resolve(outputPath);
       } catch (err) {
         logger(`All encoding attempts failed: ${err.message}`);
         reject(err);
@@ -531,6 +617,12 @@ async function recordWebsite(url, duration = 10, options = {}) {
       `--js-flags=--max-old-space-size=${Math.floor(AVAILABLE_MEMORY * 1024 * 0.25)}`, // 25% of available RAM
       '--memory-pressure-off',
       '--disable-renderer-backgrounding',
+      
+      // RAM usage optimizations
+      '--enable-features=MemoryOptimization',
+      '--enable-javascript-harmony',
+      '--single-process', // Use single process to maximize RAM usage efficiency
+      '--disable-site-isolation-trials',
       
       // Better compositing
       '--enable-features=VaapiVideoDecoder,CanvasOopRasterization,VizDisplayCompositor',
@@ -993,6 +1085,56 @@ async function recordWebsite(url, duration = 10, options = {}) {
     
     log(`Recording session ${sessionId} complete`);
     logMetrics(`SESSION_COMPLETE,DURATION=${Date.now() - sessionStartTime}ms`);
+    
+    // Clean up RAM disk completely if we're using one
+    if (os.platform() === 'darwin' && tempDir === macOSRamDisk) {
+      // Give a short delay to ensure any pending file operations are complete
+      await new Promise(resolve => setTimeout(resolve, 500));
+      
+      // Perform deep cleanup of RAM disk
+      const ramDiskCleaned = cleanupMacOSRamDisk(log);
+      if (ramDiskCleaned) {
+        log(`RAM disk completely cleaned up at ${tempDir}`);
+        logMetrics(`RAM_DISK_CLEANUP_COMPLETE,PATH=${tempDir}`);
+      } else {
+        log(`RAM disk cleanup skipped or failed`);
+        logMetrics(`RAM_DISK_CLEANUP_SKIPPED,PATH=${tempDir}`);
+      }
+    } else if (isUbuntu() && tempDir === ubuntuRamDisk) {
+      // Give a short delay to ensure any pending file operations are complete
+      await new Promise(resolve => setTimeout(resolve, 500));
+      
+      // Perform deep cleanup of Ubuntu RAM disk
+      const ramDiskCleaned = cleanupUbuntuRamDisk(log);
+      if (ramDiskCleaned) {
+        log(`Ubuntu RAM disk completely cleaned up at ${tempDir}`);
+        logMetrics(`UBUNTU_RAM_DISK_CLEANUP_COMPLETE,PATH=${tempDir}`);
+        
+        // Check if we should unmount the RAM disk
+        // Only unmount if this is the last process using it
+        try {
+          const processesUsingRamDisk = parseInt(
+            execSync(`lsof ${tempDir} | wc -l`).toString().trim()
+          );
+          
+          if (processesUsingRamDisk <= 1) {
+            log(`No other processes using RAM disk, attempting to unmount...`);
+            const unmounted = unmountUbuntuRamDisk(log);
+            if (unmounted) {
+              logMetrics(`UBUNTU_RAM_DISK_UNMOUNTED,PATH=${tempDir}`);
+            }
+          } else {
+            log(`${processesUsingRamDisk} processes still using RAM disk, skipping unmount`);
+            logMetrics(`UBUNTU_RAM_DISK_BUSY,PROCESSES=${processesUsingRamDisk}`);
+          }
+        } catch (processCheckError) {
+          log(`Error checking processes using RAM disk: ${processCheckError.message}`);
+        }
+      } else {
+        log(`Ubuntu RAM disk cleanup skipped or failed`);
+        logMetrics(`UBUNTU_RAM_DISK_CLEANUP_SKIPPED,PATH=${tempDir}`);
+      }
+    }
   }
 }
 

@@ -63,3 +63,9 @@ npm run dev
 ## Deployment
 
 See the `deploy-instructions.md` file for various deployment options.
+
+## Ubuntu Server Support
+
+This application includes support for running on Ubuntu Server with RAM disk optimization. The RAM disk setup is automatically handled by the `install.sh` script during installation.
+
+For Ubuntu-specific details, see [README-ubuntu.md](README-ubuntu.md).
