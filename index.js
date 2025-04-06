@@ -878,6 +878,9 @@ app.get('/api/recordings', async (req, res) => {
       }
     });
     
+    // Sort all recordings by timestamp, most recent first (ensuring multi-platform sessions are also sorted)
+    recordingSessions.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
+    
     // Return the results
     res.json({
       success: true,
