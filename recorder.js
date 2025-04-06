@@ -12,7 +12,7 @@ const VIDEO_HEIGHT = 1080;
 const VIDEO_BITRATE = '12M';  // 12 Mbps for good quality
 const FFMPEG_PATH = process.env.FFMPEG_PATH || 'ffmpeg';
 const USE_HARDWARE_ACCELERATION = true;
-const CODEC = 'libvpx-vp9';
+const CODEC = 'libx264';
 const QUALITY_PRESET = 'good'; // Balanced preset
 const TWO_PASS_ENCODING = false; // Single-pass for speed
 const THREAD_COUNT = 8; // Use all available cores
@@ -372,15 +372,10 @@ async function enhanceVideoQuality(inputPath, outputPath, logger, videoOptions =
       return new Promise((resolvePass, rejectPass) => {
         const ffmpegArgs = [
           '-i', inputPath,
-          '-c:v', CODEC,
+          '-c:v', 'libx264',
           '-b:v', VIDEO_BITRATE,
-          '-deadline', 'good',
-          '-cpu-used', '2',  // Faster processing (0=best quality, 4=faster)
+          '-preset', 'medium',
           '-threads', THREAD_COUNT.toString(),
-          '-auto-alt-ref', '1',
-          '-lag-in-frames', '16', // Reduced from 25 for speed
-          '-frame-parallel', '1',
-          '-tile-columns', '4', // More tiles for parallel processing
           '-pix_fmt', 'yuv420p', // Standard pixel format (faster)
           '-r', `${VIDEO_FPS}`,
         ];
@@ -631,7 +626,7 @@ async function recordWebsite(url, duration = 10, options = {}) {
   const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
   const rawVideoFilename = `raw-recording-${sessionId}-${timestamp}.webm`;
   const rawVideoPath = path.join(tempDir, rawVideoFilename);
-  const finalVideoFilename = `recording-${sessionId}-${timestamp}.webm`;
+  const finalVideoFilename = `recording-${sessionId}-${timestamp}.mp4`;
   const finalVideoPath = path.join(uploadsDir, finalVideoFilename);
   
   // Launch browser
@@ -937,7 +932,7 @@ async function recordWebsite(url, duration = 10, options = {}) {
         
         // Filter for .webm files created during this session
         const recentVideos = files
-          .filter(file => file.endsWith('.webm'))
+          .filter(file => file.endsWith('.webm') || file.endsWith('.mp4'))
           .map(file => {
             const fullPath = path.join(tempDir, file);
             const stats = fs.statSync(fullPath);
@@ -1129,7 +1124,7 @@ async function recordWebsite(url, duration = 10, options = {}) {
       try {
         if (fs.existsSync(tempDir)) {
           const tempFiles = fs.readdirSync(tempDir)
-            .filter(file => file.endsWith('.webm'))
+            .filter(file => file.endsWith('.webm') || file.endsWith('.mp4'))
             .map(file => path.join(tempDir, file));
           
           // Log number of temp files to be deleted

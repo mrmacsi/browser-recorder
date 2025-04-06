@@ -96,27 +96,27 @@ The API will return an object with all platform recordings:
     {
       "platform": "STANDARD_16_9",
       "success": true,
-      "fileName": "recording-abc123.webm",
-      "url": "/uploads/recording-abc123.webm",
-      "absoluteUrl": "http://example.com/uploads/recording-abc123.webm",
+      "fileName": "recording-abc123.mp4",
+      "url": "/uploads/recording-abc123.mp4",
+      "absoluteUrl": "http://example.com/uploads/recording-abc123.mp4",
       "logFile": "recording-abc123.log",
       "logUrl": "/api/logs/recording-abc123.log"
     },
     {
       "platform": "VERTICAL_9_16",
       "success": true,
-      "fileName": "recording-def456.webm",
-      "url": "/uploads/recording-def456.webm",
-      "absoluteUrl": "http://example.com/uploads/recording-def456.webm",
+      "fileName": "recording-def456.mp4",
+      "url": "/uploads/recording-def456.mp4",
+      "absoluteUrl": "http://example.com/uploads/recording-def456.mp4",
       "logFile": "recording-def456.log",
       "logUrl": "/api/logs/recording-def456.log"
     },
     {
       "platform": "SQUARE",
       "success": true,
-      "fileName": "recording-ghi789.webm",
-      "url": "/uploads/recording-ghi789.webm",
-      "absoluteUrl": "http://example.com/uploads/recording-ghi789.webm",
+      "fileName": "recording-ghi789.mp4",
+      "url": "/uploads/recording-ghi789.mp4",
+      "absoluteUrl": "http://example.com/uploads/recording-ghi789.mp4",
       "logFile": "recording-ghi789.log",
       "logUrl": "/api/logs/recording-ghi789.log"
     }

@@ -47,15 +47,17 @@ app.use(express.json());
 
 // Serve static files from the uploads directory with explicit MIME types
 app.use('/uploads', (req, res, next) => {
-  // Set the correct MIME type for webm files
+  // Set the correct MIME type for video files
   if (req.path.endsWith('.webm')) {
     res.set('Content-Type', 'video/webm');
+  } else if (req.path.endsWith('.mp4')) {
+    res.set('Content-Type', 'video/mp4');
   }
   next();
 }, express.static(path.join(__dirname, 'uploads'), {
   // Set Cache-Control headers
   setHeaders: (res, filePath) => {
-    if (path.extname(filePath) === '.webm') {
+    if (path.extname(filePath) === '.webm' || path.extname(filePath) === '.mp4') {
       // No caching for videos for development purposes
       res.setHeader('Cache-Control', 'no-cache');
     }
@@ -203,6 +205,8 @@ app.post('/api/record', async (req, res) => {
     
     // Determine the content type
     const isImage = resultFilename.endsWith('.png');
+    const contentType = isImage ? 'image/png' : 
+                       resultFilename.endsWith('.mp4') ? 'video/mp4' : 'video/webm';
     
     // Return the recording details
     res.json({
@@ -215,7 +219,7 @@ app.post('/api/record', async (req, res) => {
       metricsFile: metricsFilename,
       metricsUrl: `/api/metrics/${metricsFilename}`,
       fileSize: fileSize,
-      fileType: isImage ? 'image/png' : 'video/webm'
+      fileType: contentType
     });
   } catch (error) {
     console.error('Error during recording:', error);
@@ -282,8 +286,9 @@ app.delete('/api/files/:filename', (req, res) => {
     const filename = req.params.filename;
     const filePath = path.join(uploadsDir, filename);
     
-    // Check if file exists and ensure it's a webm file for security
-    if (!fs.existsSync(filePath) || !filename.endsWith('.webm')) {
+    // Check if file exists and ensure it's a video file for security
+    if (!fs.existsSync(filePath) || 
+        !(filename.endsWith('.webm') || filename.endsWith('.mp4'))) {
       return res.status(404).json({
         success: false,
         error: 'File not found',
@@ -545,7 +550,7 @@ app.get('/api/recordings', async (req, res) => {
     
     // Get all video files from uploads directory
     const videoFiles = fs.readdirSync(uploadsDir)
-      .filter(file => file.endsWith('.webm'))
+      .filter(file => file.endsWith('.webm') || file.endsWith('.mp4'))
       .map(file => {
         const stats = fs.statSync(path.join(uploadsDir, file));
         return {
@@ -1022,7 +1027,7 @@ app.delete('/api/recordings/:sessionId', (req, res) => {
     allSessionIds.forEach(id => {
       // Find video files for this session ID
       const sessionVideoFiles = fs.readdirSync(uploadsDir)
-        .filter(file => file.includes(id) && file.endsWith('.webm'))
+        .filter(file => file.includes(id) && (file.endsWith('.webm') || file.endsWith('.mp4')))
         .map(file => path.join(uploadsDir, file));
       
       // Find log files for this session ID
@@ -1104,7 +1109,7 @@ app.delete('/api/recordings', (req, res) => {
     // Find all files in all directories
     const videoFiles = fs.existsSync(uploadsDir) ? 
       fs.readdirSync(uploadsDir)
-        .filter(file => file.endsWith('.webm'))
+        .filter(file => file.endsWith('.webm') || file.endsWith('.mp4'))
         .map(file => path.join(uploadsDir, file)) : [];
       
     const logFiles = fs.existsSync(logsDir) ?
@@ -1172,6 +1177,66 @@ app.delete('/api/recordings', (req, res) => {
     });
   }
 });
+
+// List recordings in a grouped format
+app.get('/api/recordings/grouped', (req, res) => {
+  try {
+    // Get all files
+    const uploadFiles = fs.readdirSync(uploadsDir);
+    
+    // Filter videos only
+    const videos = uploadFiles
+      .filter(file => file.endsWith('.webm') || file.endsWith('.mp4'))
+      .map(fileName => {
+        const stats = fs.statSync(path.join(uploadsDir, fileName));
+        
+        // Get the host from request
+        const host = req.get('host');
+        const protocol = req.protocol;
+        
+        return {
+          filename: fileName,
+          url: `/uploads/${fileName}`,
+          absoluteUrl: `${protocol}://${host}/uploads/${fileName}`,
+          size: stats.size,
+          created: stats.mtime.toISOString()
+        };
+      });
+    
+    // Group videos by session ID
+    const groupedVideos = {};
+    videos.forEach(video => {
+      const sessionId = video.filename.split('-')[1];
+      if (!groupedVideos[sessionId]) {
+        groupedVideos[sessionId] = [];
+      }
+      groupedVideos[sessionId].push(video);
+    });
+    
+    // Return the grouped videos
+    res.json({
+      success: true,
+      groupedVideos
+    });
+  } catch (error) {
+    console.error('Error listing grouped videos:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Server error',
+      message: error.message
+    });
+  }
+});
+
+const getRelatedFiles = (id) => {
+  // Find related files
+  const allFiles = fs.readdirSync(uploadsDir);
+  const videoFiles = allFiles
+    .filter(file => file.includes(id) && (file.endsWith('.webm') || file.endsWith('.mp4')))
+    .map(file => path.join(uploadsDir, file));
+  
+  return videoFiles;
+};
 
 // Create server based on environment
 let server;
