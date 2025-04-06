@@ -459,17 +459,56 @@ async function enhanceVideoQuality(inputPath, outputPath, logger, videoOptions =
 
 // Platform dimension presets with industry standard resolutions
 const DIMENSIONS = {
-  SQUARE: { aspect: '1:1', width: { '720p': 720, '1080p': 1080, '1440p': 1440, '2160p': 2160 }, height: { '720p': 720, '1080p': 1080, '1440p': 1440, '2160p': 2160 } },
-  VERTICAL_9_16: { aspect: '9:16', width: { '720p': 405, '1080p': 608, '1440p': 810, '2160p': 1215 }, height: { '720p': 720, '1080p': 1080, '1440p': 1440, '2160p': 2160 } },
-  STANDARD_16_9: { aspect: '16:9', width: { '720p': 1280, '1080p': 1920, '1440p': 2560, '2160p': 3840 }, height: { '720p': 720, '1080p': 1080, '1440p': 1440, '2160p': 2160 } }
-};
-
-// Resolution presets (using 16:9 as reference)
-const RESOLUTIONS = {
-  '720p': { width: 1280, height: 720 },    // HD
-  '1080p': { width: 1920, height: 1080 },  // Full HD
-  '1440p': { width: 2560, height: 1440 },  // QHD (2K)
-  '2160p': { width: 3840, height: 2160 }   // UHD (4K)
+  // Square format (1:1 aspect ratio)
+  SQUARE: { 
+    aspect: '1:1', 
+    width: { 
+      '720p': 720, 
+      '1080p': 1080, 
+      '1440p': 1440, 
+      '2160p': 2160 
+    }, 
+    height: { 
+      '720p': 720, 
+      '1080p': 1080, 
+      '1440p': 1440, 
+      '2160p': 2160 
+    } 
+  },
+  
+  // Vertical format (9:16 aspect ratio) for stories and mobile
+  VERTICAL_9_16: { 
+    aspect: '9:16', 
+    width: { 
+      '720p': 405, 
+      '1080p': 608, 
+      '1440p': 810, 
+      '2160p': 1215 
+    }, 
+    height: { 
+      '720p': 720, 
+      '1080p': 1080, 
+      '1440p': 1440, 
+      '2160p': 2160 
+    } 
+  },
+  
+  // Standard widescreen format (16:9 aspect ratio)
+  STANDARD_16_9: { 
+    aspect: '16:9',
+    width: {
+      '720p': 1280, 
+      '1080p': 1920, 
+      '1440p': 2560, 
+      '2160p': 3840
+    },
+    height: {
+      '720p': 720, 
+      '1080p': 1080, 
+      '1440p': 1440, 
+      '2160p': 2160
+    }
+  }
 };
 
 // API endpoint for recording with platform dimensions
@@ -487,7 +526,7 @@ async function recordWithPlatformSettings(url, options = {}) {
   }
 
   // Validate resolution
-  if (!RESOLUTIONS[resolution]) {
+  if (!DIMENSIONS[platform].width[resolution]) {
     throw new Error(`Invalid resolution: ${resolution}. Supported resolutions: 720p, 1080p, 1440p, 2160p`);
   }
 
