@@ -1208,12 +1208,12 @@ if (isDev) {
 server.listen(PORT, () => {
   console.log(`Server running on port ${PORT} (${isDev ? 'HTTP' : 'HTTPS'})`);
 }).on('error', (err) => {
-  if (err.code === 'EADDRINUSE') {
+        if (err.code === 'EADDRINUSE') {
     console.error(`Port ${PORT} is already in use. Please kill the process using this port.`);
     process.exit(1);
-  } else {
-    console.error('Server error:', err);
-  }
+        } else {
+          console.error('Server error:', err);
+        }
 });
 
 // Handle graceful shutdown
@@ -1226,5 +1226,5 @@ process.on('SIGTERM', () => {
 process.on('SIGINT', () => {
   console.log('SIGINT received, shutting down gracefully');
   server.close(() => console.log('Server closed'));
-  process.exit(0); 
+  process.exit(0);
 }); 
