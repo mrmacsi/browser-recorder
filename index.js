@@ -114,12 +114,16 @@ app.post('/api/record', async (req, res) => {
       const enhancedResults = result.platforms.map(platform => {
         if (!platform.success) return platform;
         
+        // Determine the content type
+        const fileType = platform.fileName.endsWith('.mp4') ? 'video/mp4' : 'video/webm';
+        
         return {
           ...platform,
           url: `/uploads/${platform.fileName}`,
           absoluteUrl: `${protocol}://${host}/uploads/${platform.fileName}`,
           logUrl: `/api/logs/${platform.logFile}`,
-          metricsUrl: `/api/metrics/${platform.metricsFile}`
+          metricsUrl: `/api/metrics/${platform.metricsFile}`,
+          fileType
         };
       });
       
@@ -248,7 +252,7 @@ app.get('/api/files', (req, res) => {
     }
     
     const files = fs.readdirSync(uploadsDir)
-      .filter(file => file.endsWith('.webm'))
+      .filter(file => file.endsWith('.webm') || file.endsWith('.mp4'))
       .map(file => {
         const stats = fs.statSync(path.join(uploadsDir, file));
         
@@ -256,12 +260,16 @@ app.get('/api/files', (req, res) => {
         const host = req.get('host');
         const protocol = req.protocol;
         
+        // Determine the content type
+        const fileType = file.endsWith('.mp4') ? 'video/mp4' : 'video/webm';
+        
         return {
           filename: file,
           url: `/uploads/${file}`,
           absoluteUrl: `${protocol}://${host}/uploads/${file}`,
           size: stats.size,
-          created: stats.mtime.toISOString()
+          created: stats.mtime.toISOString(),
+          fileType
         };
       })
       .sort((a, b) => new Date(b.created) - new Date(a.created));
@@ -553,11 +561,14 @@ app.get('/api/recordings', async (req, res) => {
       .filter(file => file.endsWith('.webm') || file.endsWith('.mp4'))
       .map(file => {
         const stats = fs.statSync(path.join(uploadsDir, file));
+        // Determine the content type
+        const fileType = file.endsWith('.mp4') ? 'video/mp4' : 'video/webm';
         return {
           filename: file,
           path: path.join(uploadsDir, file),
           size: stats.size,
-          created: stats.mtime.getTime()
+          created: stats.mtime.getTime(),
+          fileType
         };
       });
     
@@ -713,6 +724,7 @@ app.get('/api/recordings', async (req, res) => {
           url: `/uploads/${video.filename}`,
           absoluteUrl: `${protocol}://${host}/uploads/${video.filename}`,
           size: video.size,
+          fileType: video.fileType,
           created: new Date(video.created).toISOString()
         },
         log: matchingLog ? {
@@ -858,14 +870,22 @@ app.get('/api/recordings', async (req, res) => {
             url: `/api/logs/${parentLog.filename}`,
             path: parentLog.path
           },
-          platforms: childRecordings.map(r => ({
-            platform: r.platform,
-            video: r.video,
-            log: r.log,
-            metrics: r.metrics,
-            resolution: r.resolution,
-            sessionId: r.sessionId
-          }))
+          platforms: childRecordings.map(r => {
+            // Determine the file type for the video
+            const videoFileType = r.video.filename.endsWith('.mp4') ? 'video/mp4' : 'video/webm';
+            
+            return {
+              platform: r.platform,
+              video: {
+                ...r.video,
+                fileType: videoFileType
+              },
+              log: r.log,
+              metrics: r.metrics,
+              resolution: r.resolution,
+              sessionId: r.sessionId
+            };
+          })
         });
         
         // Remove the individual recordings
@@ -1194,12 +1214,16 @@ app.get('/api/recordings/grouped', (req, res) => {
         const host = req.get('host');
         const protocol = req.protocol;
         
+        // Determine the content type
+        const fileType = fileName.endsWith('.mp4') ? 'video/mp4' : 'video/webm';
+        
         return {
           filename: fileName,
           url: `/uploads/${fileName}`,
           absoluteUrl: `${protocol}://${host}/uploads/${fileName}`,
           size: stats.size,
-          created: stats.mtime.toISOString()
+          created: stats.mtime.toISOString(),
+          fileType
         };
       });
     
