@@ -761,6 +761,89 @@ app.get('/api/frame-rates', (req, res) => {
   }
 });
 
+// Add API endpoint to delete a specific recording session and all its files
+app.delete('/api/recordings/:sessionId', (req, res) => {
+  try {
+    const sessionId = req.params.sessionId;
+    
+    if (!sessionId || sessionId.length !== 8) {
+      return res.status(400).json({
+        success: false,
+        error: 'Invalid session ID',
+        message: 'Session ID must be 8 characters long'
+      });
+    }
+    
+    console.log(`Attempting to delete recording session: ${sessionId}`);
+    
+    // Find all files associated with this session ID
+    const videoFiles = fs.readdirSync(uploadsDir)
+      .filter(file => file.includes(sessionId) && file.endsWith('.webm'))
+      .map(file => path.join(uploadsDir, file));
+      
+    const logFiles = fs.readdirSync(logsDir)
+      .filter(file => file.includes(sessionId) && file.endsWith('.log'))
+      .map(file => path.join(logsDir, file));
+      
+    const metricsFiles = fs.readdirSync(metricsDir)
+      .filter(file => file.includes(sessionId) && file.endsWith('.log'))
+      .map(file => path.join(metricsDir, file));
+    
+    // Combine all files
+    const allFiles = [...videoFiles, ...logFiles, ...metricsFiles];
+    
+    if (allFiles.length === 0) {
+      return res.status(404).json({
+        success: false,
+        error: 'No files found',
+        message: `No files found for session ID: ${sessionId}`
+      });
+    }
+    
+    // Delete all files
+    const deletedFiles = [];
+    const failedFiles = [];
+    
+    allFiles.forEach(filePath => {
+      try {
+        const fileName = path.basename(filePath);
+        fs.unlinkSync(filePath);
+        deletedFiles.push(fileName);
+        console.log(`Deleted file: ${fileName}`);
+      } catch (err) {
+        failedFiles.push({
+          path: filePath,
+          error: err.message
+        });
+        console.error(`Failed to delete file ${filePath}: ${err.message}`);
+      }
+    });
+    
+    // Return the results
+    res.json({
+      success: true,
+      sessionId,
+      message: `Deleted ${deletedFiles.length} files for session ID: ${sessionId}`,
+      deleted: {
+        count: deletedFiles.length,
+        files: deletedFiles
+      },
+      failed: {
+        count: failedFiles.length,
+        files: failedFiles
+      }
+    });
+    
+  } catch (error) {
+    console.error(`Error deleting session: ${error.message}`);
+    res.status(500).json({
+      success: false,
+      error: 'Server error',
+      message: error.message
+    });
+  }
+});
+
 // Create server based on environment
 let server;
 
