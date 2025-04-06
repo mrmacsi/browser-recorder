@@ -973,18 +973,69 @@ app.delete('/api/recordings/:sessionId', (req, res) => {
     
     console.log(`Attempting to delete recording session: ${sessionId}`);
     
-    // Find all files associated with this session ID
-    const videoFiles = fs.readdirSync(uploadsDir)
-      .filter(file => file.includes(sessionId) && file.endsWith('.webm'))
-      .map(file => path.join(uploadsDir, file));
-      
-    const logFiles = fs.readdirSync(logsDir)
+    // First check if this is a parent session by looking for its log file
+    const parentLogFile = fs.readdirSync(logsDir)
       .filter(file => file.includes(sessionId) && file.endsWith('.log'))
-      .map(file => path.join(logsDir, file));
+      .find(file => {
+        try {
+          const content = fs.readFileSync(path.join(logsDir, file), 'utf8');
+          return content.includes('Starting multi-platform recording session') || 
+                 content.includes('MULTI_PLATFORM_PARENT_SESSION');
+        } catch (err) {
+          return false;
+        }
+      });
+    
+    let childSessionIds = [];
+    
+    // If this is a parent session, get the child session IDs
+    if (parentLogFile) {
+      console.log(`Found parent session log: ${parentLogFile}`);
+      try {
+        const content = fs.readFileSync(path.join(logsDir, parentLogFile), 'utf8');
+        
+        // Extract child session IDs from the parent log
+        const childIdMatches = content.matchAll(/result: recording-([a-f0-9]{8})-/g);
+        for (const match of childIdMatches) {
+          if (match[1] && !childSessionIds.includes(match[1])) {
+            childSessionIds.push(match[1]);
+            console.log(`Found child session ID: ${match[1]}`);
+          }
+        }
+      } catch (err) {
+        console.error(`Error reading parent log file: ${err.message}`);
+      }
+    }
+    
+    // Add the parent session ID to the list of IDs to delete
+    const allSessionIds = [sessionId, ...childSessionIds];
+    console.log(`Deleting files for sessions: ${allSessionIds.join(', ')}`);
+    
+    // Find all files associated with all session IDs
+    let videoFiles = [];
+    let logFiles = [];
+    let metricsFiles = [];
+    
+    allSessionIds.forEach(id => {
+      // Find video files for this session ID
+      const sessionVideoFiles = fs.readdirSync(uploadsDir)
+        .filter(file => file.includes(id) && file.endsWith('.webm'))
+        .map(file => path.join(uploadsDir, file));
       
-    const metricsFiles = fs.readdirSync(metricsDir)
-      .filter(file => file.includes(sessionId) && file.endsWith('.log'))
-      .map(file => path.join(metricsDir, file));
+      // Find log files for this session ID
+      const sessionLogFiles = fs.readdirSync(logsDir)
+        .filter(file => file.includes(id) && file.endsWith('.log'))
+        .map(file => path.join(logsDir, file));
+      
+      // Find metrics files for this session ID
+      const sessionMetricsFiles = fs.readdirSync(metricsDir)
+        .filter(file => file.includes(id) && file.endsWith('.log'))
+        .map(file => path.join(metricsDir, file));
+      
+      videoFiles = [...videoFiles, ...sessionVideoFiles];
+      logFiles = [...logFiles, ...sessionLogFiles];
+      metricsFiles = [...metricsFiles, ...sessionMetricsFiles];
+    });
     
     // Combine all files
     const allFiles = [...videoFiles, ...logFiles, ...metricsFiles];
@@ -1020,7 +1071,8 @@ app.delete('/api/recordings/:sessionId', (req, res) => {
     res.json({
       success: true,
       sessionId,
-      message: `Deleted ${deletedFiles.length} files for session ID: ${sessionId}`,
+      childSessions: childSessionIds,
+      message: `Deleted ${deletedFiles.length} files for session ID: ${sessionId} and its child sessions`,
       deleted: {
         count: deletedFiles.length,
         files: deletedFiles
