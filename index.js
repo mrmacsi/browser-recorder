@@ -101,6 +101,7 @@ app.post('/api/record', async (req, res) => {
         return res.status(500).json({
           success: false,
           error: result.error,
+          recordings: [],
           logFile: result.logFile,
           logUrl: `/api/logs/${result.logFile}`
         });
@@ -130,11 +131,21 @@ app.post('/api/record', async (req, res) => {
       // Return the multi-platform results
       return res.json({
         success: true,
-        multiPlatform: true,
-        sessionId: result.sessionId,
-        platforms: enhancedResults,
-        logFile: result.logFile,
-        logUrl: `/api/logs/${result.logFile}`
+        recordings: [{
+          sessionId: result.sessionId,
+          timestamp: new Date().toISOString(),
+          url: url,
+          isMultiPlatform: true,
+          platformCount: enhancedResults.length,
+          duration: duration || 10,
+          platforms: enhancedResults,
+          parentLog: {
+            filename: result.logFile,
+            url: `/api/logs/${result.logFile}`,
+            size: fs.existsSync(path.join(logsDir, result.logFile)) ? fs.statSync(path.join(logsDir, result.logFile)).size : 0,
+            created: new Date().toISOString()
+          }
+        }]
       });
     }
     
@@ -155,9 +166,10 @@ app.post('/api/record', async (req, res) => {
     }
     
     if (result.error) {
-      return res.status(500).json({ 
-        success: false, 
+      return res.status(500).json({
+        success: false,
         error: result.error,
+        recordings: [],
         logFile: result.logFile,
         logUrl: `/api/logs/${result.logFile}`,
         metricsFile: result.metricsFile,
@@ -215,15 +227,35 @@ app.post('/api/record', async (req, res) => {
     // Return the recording details
     res.json({
       success: true,
-      filename: resultFilename,
-      url: fileUrl,
-      absoluteUrl: absoluteUrl,
-      logFile: logFilename,
-      logUrl: `/api/logs/${logFilename}`,
-      metricsFile: metricsFilename,
-      metricsUrl: `/api/metrics/${metricsFilename}`,
-      fileSize: fileSize,
-      fileType: contentType
+      recordings: [{
+        sessionId: result.sessionId || resultFilename.split('-')[1],
+        timestamp: new Date().toISOString(),
+        url: url,
+        platform: platform || 'UNKNOWN',
+        duration: duration || 10,
+        resolution: result.resolution || result.width && result.height ? `${result.width}x${result.height}` : 'UNKNOWN',
+        quality: quality || result.quality || 'balanced',
+        video: {
+          filename: resultFilename,
+          url: fileUrl,
+          absoluteUrl: absoluteUrl,
+          size: fileSize,
+          fileType: contentType,
+          created: new Date().toISOString()
+        },
+        log: {
+          filename: logFilename,
+          url: `/api/logs/${logFilename}`,
+          size: fs.existsSync(path.join(logsDir, logFilename)) ? fs.statSync(path.join(logsDir, logFilename)).size : 0,
+          created: new Date().toISOString()
+        },
+        metrics: {
+          filename: metricsFilename,
+          url: `/api/metrics/${metricsFilename}`,
+          size: fs.existsSync(path.join(metricsDir, metricsFilename)) ? fs.statSync(path.join(metricsDir, metricsFilename)).size : 0,
+          created: new Date().toISOString()
+        }
+      }]
     });
   } catch (error) {
     console.error('Error during recording:', error);
@@ -906,10 +938,9 @@ app.get('/api/recordings', async (req, res) => {
     // Sort all recordings by timestamp, most recent first (ensuring multi-platform sessions are also sorted)
     recordingSessions.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
     
-    // Return the results
+    // Return the results directly with just the recordings array
     res.json({
       success: true,
-      count: recordingSessions.length,
       recordings: recordingSessions
     });
   } catch (error) {

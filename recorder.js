@@ -846,28 +846,8 @@ async function recordWebsite(url, duration = 10, options = {}) {
       logMetrics(`VERTICAL_OPTIMIZATIONS_APPLIED,ASPECT_RATIO=${options.aspectRatio}`);
     }
     
-    // Scroll the page to ensure all content is rendered
-    const scrollStartTime = Date.now();
-    logMetrics(`PAGE_SCROLL_START,TIME=${scrollStartTime}`);
-    
-    await page.evaluate(async () => {
-      const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
-      const height = document.body.scrollHeight;
-      
-      // Smooth scroll down and back up for better content loading
-      for (let i = 0; i < height; i += 100) {
-        window.scrollTo(0, i);
-        await delay(50);
-      }
-      
-      // Scroll back to top
-      window.scrollTo(0, 0);
-    });
-    
-    const scrollDuration = Date.now() - scrollStartTime;
-    logMetrics(`PAGE_SCROLL_COMPLETE,DURATION=${scrollDuration}ms`);
-    
-    log('Page content fully rendered for better video quality');
+    // Skip scrolling - per user request
+    log('Page content ready for recording - no scrolling');
     
     // Log recording start
     const recordingStartTime = Date.now();
